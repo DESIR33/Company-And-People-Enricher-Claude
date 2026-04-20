@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseCSV } from "@/lib/csv";
-import { createJob, updateJob, updateRow, getJob } from "@/lib/job-store";
+import { createJob, updateJob, updateRow, getJob, type CustomFieldDef } from "@/lib/job-store";
 import { enrichWithAgent } from "@/lib/agent";
 import { findWorkEmail } from "@/lib/prospeo";
 import { getFields } from "@/lib/enrichment-fields";
 
 const MAX_ROWS = 200;
+const NEWS_KEY_RE = /^recent_news_\d+$/;
 
 async function processJob(jobId: string): Promise<void> {
   const job = getJob(jobId);
@@ -14,11 +15,11 @@ async function processJob(jobId: string): Promise<void> {
   updateJob(jobId, { status: "processing" });
 
   const validFieldKeys = new Set(getFields(job.type).map((f) => f.key));
+  const customFieldNames = new Set((job.customFieldDefs ?? []).map((f) => f.name));
 
   for (const row of job.rows) {
     updateRow(jobId, row.rowIndex, { status: "processing" });
 
-    // Stop if the job was cancelled while processing
     const currentStatus = getJob(jobId)?.status;
     if (currentStatus === "cancelled") return;
 
@@ -36,7 +37,9 @@ async function processJob(jobId: string): Promise<void> {
 
     try {
       const nonProspeoFields = job.requestedFields.filter(
-        (f) => validFieldKeys.has(f) && f !== "work_email"
+        (f) =>
+          (validFieldKeys.has(f) || customFieldNames.has(f) || NEWS_KEY_RE.test(f)) &&
+          f !== "work_email"
       );
 
       let enrichedData: Record<string, string> = {};
@@ -46,6 +49,8 @@ async function processJob(jobId: string): Promise<void> {
           type: job.type,
           identifier: identifier.trim(),
           requestedFields: nonProspeoFields,
+          customFieldDefs: job.customFieldDefs ?? [],
+          newsParams: job.newsParams,
         });
         enrichedData = result.fields;
       }
@@ -77,7 +82,7 @@ async function processJob(jobId: string): Promise<void> {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { type, csvContent, identifierColumn, requestedFields } = body;
+    const { type, csvContent, identifierColumn, requestedFields, customFieldDefs, newsParams } = body;
 
     if (type !== "company" && type !== "people") {
       return NextResponse.json({ error: "Invalid type" }, { status: 400 });
@@ -107,8 +112,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const validKeys = new Set(getFields(type).map((f) => f.key));
-    const invalidFields = (requestedFields as string[]).filter((f) => !validKeys.has(f));
+    const validKeys   = new Set(getFields(type).map((f) => f.key));
+    const customNames = new Set(
+      ((customFieldDefs ?? []) as CustomFieldDef[]).map((f) => f.name)
+    );
+    const invalidFields = (requestedFields as string[]).filter(
+      (f) => !validKeys.has(f) && !customNames.has(f) && !NEWS_KEY_RE.test(f)
+    );
     if (invalidFields.length > 0) {
       return NextResponse.json(
         { error: `Invalid fields: ${invalidFields.join(", ")}` },
@@ -116,9 +126,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const job = createJob({ type, identifierColumn, requestedFields, rows });
+    const job = createJob({ type, identifierColumn, requestedFields, customFieldDefs, newsParams, rows });
 
-    // Fire and forget — do not await
     processJob(job.id).catch((err) => {
       console.error(`processJob failed for ${job.id}:`, err);
       updateJob(job.id, { status: "failed", error: String(err) });

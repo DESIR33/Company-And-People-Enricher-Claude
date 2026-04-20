@@ -1,20 +1,59 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { COMPANY_FIELDS, PEOPLE_FIELDS, type FieldDefinition } from "./enrichment-fields";
 
+export type CustomFieldDef = { name: string; description: string };
+
 type AgentEnrichParams = {
   type: "company" | "people";
   identifier: string;
   requestedFields: string[];
+  customFieldDefs?: CustomFieldDef[];
+  newsParams?: { count: number; timeframe: string };
 };
+
+const NEWS_KEY_RE = /^recent_news_\d+$/;
 
 function buildPrompt(params: AgentEnrichParams): string {
   const allFields = params.type === "company" ? COMPANY_FIELDS : PEOPLE_FIELDS;
-  const fields = allFields.filter(
-    (f) => params.requestedFields.includes(f.key) && !f.requiresProspeo
+  const customFieldDefs = params.customFieldDefs ?? [];
+
+  // Standard (non-news, non-custom) fields
+  const standardFields = allFields.filter(
+    (f) => params.requestedFields.includes(f.key) && !f.requiresProspeo && !f.isParameterized
   );
 
-  const fieldLines = fields.map((f: FieldDefinition) => `- ${f.key}: ${f.description}`).join("\n");
-  const fieldKeys = fields.map((f: FieldDefinition) => `"${f.key}": ""`).join(",\n  ");
+  // News fields e.g. recent_news_1, recent_news_2, ...
+  const newsFields = params.requestedFields.filter((f) => NEWS_KEY_RE.test(f));
+
+  const standardFieldLines = standardFields
+    .map((f: FieldDefinition) => `- ${f.key}: ${f.description}`)
+    .join("\n");
+
+  const customFieldLines =
+    customFieldDefs.length > 0
+      ? `\nADDITIONAL CUSTOM FIELDS TO EXTRACT:\n` +
+        customFieldDefs.map((f) => `- ${f.name}: ${f.description || f.name}`).join("\n")
+      : "";
+
+  const fieldsSection = standardFieldLines + customFieldLines;
+
+  // Build JSON output keys
+  const standardKeys = standardFields
+    .map((f: FieldDefinition) => `"${f.key}": ""`)
+    .join(",\n  ");
+  const customKeys = customFieldDefs.map((f) => `"${f.name}": ""`).join(",\n  ");
+  const newsKeys   = newsFields.map((f) => `"${f}": ""`).join(",\n  ");
+  const allKeys = [standardKeys, customKeys, newsKeys].filter(Boolean).join(",\n  ");
+
+  // News section for prompt
+  const newsSection =
+    newsFields.length > 0 && params.newsParams
+      ? `\nRECENT NEWS (${params.newsParams.timeframe}, ${params.newsParams.count} article${params.newsParams.count !== 1 ? "s" : ""}):\n` +
+        `Search "[company name] news" to find the ${params.newsParams.count} most recent articles published in the ${params.newsParams.timeframe}.\n` +
+        `Return each as a separate JSON field in this format: "[Mon YYYY] Headline — One sentence summary"\n` +
+        newsFields.map((f, i) => `- ${f}: Article #${i + 1} (most recent first)`).join("\n") +
+        `\nUse "NA" if fewer articles exist within the timeframe.`
+      : "";
 
   if (params.type === "company") {
     return `You are a company research specialist. Find specific information about a company.
@@ -23,20 +62,21 @@ COMPANY IDENTIFIER: ${params.identifier}
 (This is the company's website URL or LinkedIn URL)
 
 FIELDS TO FIND:
-${fieldLines}
+${fieldsSection}${newsSection}
 
 INSTRUCTIONS:
 1. Use WebSearch to find the company's website and LinkedIn page
 2. Use WebFetch to load the company LinkedIn page and website to extract accurate data
 3. For funding and revenue, search "[company name] funding revenue crunchbase"
 4. For technologies, search "[company name] tech stack" or fetch their jobs page
+5. For news, search "[company name] news [current year]" and use recent results
 
 OUTPUT FORMAT:
 Respond with ONLY a valid JSON object. No markdown, no prose, no code fences.
-Use empty string "" for any field you cannot find.
+Use "NA" for any field you cannot find.
 
 {
-  ${fieldKeys}
+  ${allKeys}
 }`;
   }
 
@@ -46,7 +86,7 @@ PERSON IDENTIFIER: ${params.identifier}
 (This is the person's LinkedIn profile URL)
 
 FIELDS TO FIND:
-${fieldLines}
+${fieldsSection}${newsSection}
 
 INSTRUCTIONS:
 1. Use WebFetch to load the LinkedIn profile URL directly
@@ -57,10 +97,10 @@ INSTRUCTIONS:
 
 OUTPUT FORMAT:
 Respond with ONLY a valid JSON object. No markdown, no prose, no code fences.
-Use empty string "" for any field you cannot find.
+Use "NA" for any field you cannot find.
 
 {
-  ${fieldKeys}
+  ${allKeys}
 }`;
 }
 
@@ -123,7 +163,10 @@ function normalizeFields(
 export async function enrichWithAgent(
   params: AgentEnrichParams
 ): Promise<{ fields: Record<string, string> }> {
+  const customFieldNames = new Set((params.customFieldDefs ?? []).map((f) => f.name));
+
   const nonProspeoFields = params.requestedFields.filter((f) => {
+    if (customFieldNames.has(f) || NEWS_KEY_RE.test(f)) return true;
     const allFields = params.type === "company" ? COMPANY_FIELDS : PEOPLE_FIELDS;
     const def = allFields.find((d) => d.key === f);
     return def && !def.requiresProspeo;

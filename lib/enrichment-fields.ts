@@ -3,6 +3,7 @@ export type FieldDefinition = {
   label: string;
   description: string;
   requiresProspeo?: boolean;
+  isParameterized?: boolean;
 };
 
 export type FieldGroup = {
@@ -25,6 +26,8 @@ export const COMPANY_FIELD_GROUPS: FieldGroup[] = [
     fields: [
       { key: "revenue_estimate", label: "Revenue Estimate", description: "Estimated annual revenue range (e.g. $1M–$10M)" },
       { key: "funding_stage",    label: "Funding Stage",    description: "Latest funding round (e.g. Seed, Series A, Public)" },
+      { key: "funding_amount",        label: "Total Funding Amount",  description: "Total cumulative funding raised to date (e.g. $5M, $50M, $1.2B)" },
+      { key: "recent_funding_amount", label: "Recent Funding Amount", description: "Amount raised in the most recent funding round (e.g. $10M Series A)" },
     ],
   },
   {
@@ -33,6 +36,17 @@ export const COMPANY_FIELD_GROUPS: FieldGroup[] = [
       { key: "key_technologies", label: "Key Technologies", description: "Main tools or tech stack (e.g. Salesforce, AWS, React)" },
       { key: "linkedin_url",     label: "LinkedIn URL",     description: "Company LinkedIn page URL" },
       { key: "website_url",      label: "Website URL",      description: "Official company website URL" },
+    ],
+  },
+  {
+    label: "News & Activity",
+    fields: [
+      {
+        key: "recent_news",
+        label: "Recent Company News",
+        description: "Latest news articles about the company — configure count and time frame",
+        isParameterized: true,
+      },
     ],
   },
 ];
