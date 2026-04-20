@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* Fonts */
+  --font-sans:    var(--font-dm-sans);
+  --font-serif:   var(--font-lora);
+
+  /* Claude brand palette */
+  --color-brand-50:   #fdf3ee;
+  --color-brand-100:  #fae3d4;
+  --color-brand-200:  #f5c4a4;
+  --color-brand-400:  #d07550;
+  --color-brand-500:  #c15f3c;
+  --color-brand-600:  #a8512f;
+  --color-brand-700:  #8f4428;
+  --color-pampas:     #f4f3ee;
+  --color-cloudy:     #b1ada1;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; }
+
+body {
+  background: transparent;
+  color: #1a1a18;
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-lora), Georgia, serif;
+}
+
+.tabular { font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,74 @@
+export type FieldDefinition = {
+  key: string;
+  label: string;
+  description: string;
+  requiresProspeo?: boolean;
+};
+
+export type FieldGroup = {
+  label: string;
+  fields: FieldDefinition[];
+};
+
+export const COMPANY_FIELD_GROUPS: FieldGroup[] = [
+  {
+    label: "Company Profile",
+    fields: [
+      { key: "industry",     label: "Industry",     description: "Primary industry or sector (e.g. SaaS, Fintech, Healthcare)" },
+      { key: "company_size", label: "Company Size",  description: "Headcount range (e.g. 10–50, 50–200)" },
+      { key: "hq_location",  label: "HQ Location",  description: "City and country of headquarters" },
+      { key: "description",  label: "Description",  description: "One-sentence summary of what the company does" },
+    ],
+  },
+  {
+    label: "Financials & Stage",
+    fields: [
+      { key: "revenue_estimate", label: "Revenue Estimate", description: "Estimated annual revenue range (e.g. $1M–$10M)" },
+      { key: "funding_stage",    label: "Funding Stage",    description: "Latest funding round (e.g. Seed, Series A, Public)" },
+    ],
+  },
+  {
+    label: "Tech & Web",
+    fields: [
+      { key: "key_technologies", label: "Key Technologies", description: "Main tools or tech stack (e.g. Salesforce, AWS, React)" },
+      { key: "linkedin_url",     label: "LinkedIn URL",     description: "Company LinkedIn page URL" },
+      { key: "website_url",      label: "Website URL",      description: "Official company website URL" },
+    ],
+  },
+];
+
+export const PEOPLE_FIELD_GROUPS: FieldGroup[] = [
+  {
+    label: "Identity",
+    fields: [
+      { key: "job_title",       label: "Job Title",       description: "Current role at their company" },
+      { key: "current_company", label: "Current Company", description: "Company they currently work at" },
+      { key: "seniority_level", label: "Seniority Level", description: "Inferred from title: Junior / Senior / Manager / Director / VP / C-Suite" },
+    ],
+  },
+  {
+    label: "Contact",
+    fields: [
+      {
+        key: "work_email",
+        label: "Work Email",
+        description: "Professional email address — found via Prospeo.io (requires PROSPEO_API_KEY in .env.local)",
+        requiresProspeo: true,
+      },
+      { key: "linkedin_url",      label: "LinkedIn URL",      description: "LinkedIn profile URL" },
+      { key: "linkedin_headline", label: "LinkedIn Headline", description: "Headline text from their LinkedIn profile" },
+      { key: "location",          label: "Location",          description: "City and country where they are based" },
+    ],
+  },
+];
+
+export const COMPANY_FIELDS: FieldDefinition[] = COMPANY_FIELD_GROUPS.flatMap((g) => g.fields);
+export const PEOPLE_FIELDS:  FieldDefinition[] = PEOPLE_FIELD_GROUPS.flatMap((g)  => g.fields);
+
+export function getFields(type: "company" | "people"): FieldDefinition[] {
+  return type === "company" ? COMPANY_FIELDS : PEOPLE_FIELDS;
+}
+
+export function getFieldGroups(type: "company" | "people"): FieldGroup[] {
+  return type === "company" ? COMPANY_FIELD_GROUPS : PEOPLE_FIELD_GROUPS;
+}
