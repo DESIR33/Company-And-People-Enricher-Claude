@@ -1,10 +1,10 @@
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
-import { COMPANY_FIELDS, PEOPLE_FIELDS, type FieldDefinition } from "./enrichment-fields";
+import { getFields, type FieldDefinition } from "./enrichment-fields";
 
 export type CustomFieldDef = { name: string; description: string };
 
 type AgentEnrichParams = {
-  type: "company" | "people";
+  type: "company" | "people" | "decision_maker";
   identifier: string;
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];
@@ -51,7 +51,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 type PromptParts = { systemPrompt: string; userPrompt: string };
 
 function buildPromptParts(params: AgentEnrichParams): PromptParts {
-  const allFields = params.type === "company" ? COMPANY_FIELDS : PEOPLE_FIELDS;
+  const allFields = getFields(params.type);
   const customFieldDefs = params.customFieldDefs ?? [];
 
   const standardFields = allFields.filter(
@@ -101,6 +101,45 @@ function buildPromptParts(params: AgentEnrichParams): PromptParts {
         : "") +
       `- If nothing concrete is known, return "NA" rather than a generic line.`
     : "";
+
+  if (params.type === "decision_maker") {
+    const systemPrompt = `You are a B2B prospecting researcher for cold outreach to LOCAL BUSINESSES (restaurants, dentists, plumbers, boutiques, med spas, agencies, etc.). Given a business name (optionally with city), you must identify the real decision maker, enumerate reachable contact channels, and score how qualified the lead is.
+
+FIELDS TO FIND:
+${fieldsSection}${firstLineSection}
+
+RESEARCH PLAYBOOK:
+1. RESOLVE THE BUSINESS. The input is a business name — possibly ambiguous (many "Joe's Pizza"). Search '"[name]" [city if given]' and identify the most likely single business. Confirm with Google Maps / Google Business Profile + website. If the name is generic and no city is given, prefer the business with the strongest web footprint.
+2. EXTRACT BUSINESS CHANNELS. Visit the website (footer, /contact, /about), Google Business Profile, Facebook page, Instagram bio. Capture phone, email, socials, Google Business URL.
+3. FIND THE DECISION MAKER. Try these sources in order, stopping when you have a confident match:
+   a. LinkedIn: search 'site:linkedin.com/in "[business name]" (owner OR founder OR "general manager" OR principal)'.
+   b. Google Business Profile / Google Maps: owner is sometimes listed in responses to reviews or the profile itself.
+   c. Facebook About / Page Transparency: often lists page admins or a named owner.
+   d. Website About / Team / Meet the Owner pages.
+   e. Local news, press releases, chamber-of-commerce listings.
+   If several candidates appear, prefer the one whose role is explicitly Owner/Founder/Principal, then General Manager, then Manager. For franchises, prefer the local operator, not the corporate CEO.
+4. PICK THE BEST CONTACT CHANNEL. Choose the ONE channel most likely to actually get a reply based on observable signals: a freshly-updated LinkedIn > an actively-posting Instagram > Google Business Message enabled > phone > generic info@ email. If the decision maker has a personal LinkedIn with recent activity, that almost always wins.
+5. SCORE QUALIFICATION. This is a JUDGEMENT, not a fact. Use this rubric; award partial credit where appropriate; the five sub-scores MUST sum to qualification_score:
+   - DM Identified (0–25): 25 = named owner confirmed by ≥2 sources. 15 = single strong source. 8 = inferred (e.g. small-team LinkedIn search). 0 = unknown.
+   - Reachability (0–25): 25 = direct personal channel (LinkedIn DM / Instagram DM of the owner). 15 = warm business channel (Google Business Messages enabled, active Facebook page). 8 = phone/email only. 0 = no working channel.
+   - Digital Presence (0–25): 25 = website + GBP + active social. 15 = two of the three. 8 = one. 0 = none.
+   - Activity Signal (0–15): recent posts / recent review replies / recent news within 90 days. 0 = dormant.
+   - Fit (0–10): if an outreach context is provided, score how well this business matches. If no context is provided, default to 7.
+   Then: qualification_tier = A (80–100) / B (60–79) / C (40–59) / D (0–39).
+   qualification_breakdown MUST follow: 'DM Identified: X/25; Reachability: X/25; Digital Presence: X/25; Activity Signal: X/15; Fit: X/10'.
+6. HONESTY RULES. Do NOT invent an owner name. If you cannot identify a specific decision maker with reasonable confidence, return 'NA' for decision_maker_name/title/linkedin and set decision_maker_confidence to 'Low' — this is better than hallucinating. Do NOT guess personal email addresses; return 'NA' unless the email is published and clearly tied to this person.
+${params.outreachContext?.trim() ? `\nOUTREACH CONTEXT (use to tune 'Fit' score and first_line): "${params.outreachContext.trim()}"\n` : ""}
+OUTPUT FORMAT:
+Respond with ONLY a valid JSON object. No markdown, no prose, no code fences.
+Use "NA" for any field you genuinely cannot find. Do NOT use "NA" for qualification fields — always produce a score based on what you did find.
+
+{
+  ${allKeys}
+}`;
+    const userPrompt = `BUSINESS IDENTIFIER: ${params.identifier}
+(This is a local business name. It may include a city or location hint — if so, use it to disambiguate. If not, identify the most likely single business from web signals.)`;
+    return { systemPrompt, userPrompt };
+  }
 
   if (params.type === "company") {
     const systemPrompt = `You are a company research specialist. Find specific information about a company.
@@ -220,8 +259,7 @@ export async function enrichWithAgent(
 
   const nonProspeoFields = params.requestedFields.filter((f) => {
     if (customFieldNames.has(f) || NEWS_KEY_RE.test(f)) return true;
-    const allFields = params.type === "company" ? COMPANY_FIELDS : PEOPLE_FIELDS;
-    const def = allFields.find((d) => d.key === f);
+    const def = getFields(params.type).find((d) => d.key === f);
     return def && !def.requiresProspeo;
   });
 
@@ -274,7 +312,7 @@ export async function enrichWithAgent(
           model: params.model ?? "claude-haiku-4-5-20251001",
           systemPrompt: [systemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY],
           allowedTools: ["WebSearch", "WebFetch"],
-          maxTurns: params.type === "people" ? 15 : 10,
+          maxTurns: params.type === "decision_maker" ? 20 : params.type === "people" ? 15 : 10,
           permissionMode: "acceptEdits",
           abortController: attemptAbort,
         },

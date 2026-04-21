@@ -11,6 +11,7 @@ import {
   AlertCircle,
   Building2,
   Users,
+  UserSearch,
   Plus,
   X,
 } from "lucide-react";
@@ -22,9 +23,12 @@ import Image from "next/image";
 const MAX_ROWS = 200;
 
 const TABS = [
-  { type: "company" as const, label: "Company", icon: Building2 },
-  { type: "people"  as const, label: "People",  icon: Users },
+  { type: "company"         as const, label: "Company",        icon: Building2 },
+  { type: "people"          as const, label: "People",         icon: Users },
+  { type: "decision_maker"  as const, label: "Decision Maker", icon: UserSearch },
 ];
+
+type EnrichType = "company" | "people" | "decision_maker";
 
 const TIMEFRAME_OPTIONS = [
   { value: "last 30 days",   label: "Last 30 days" },
@@ -37,9 +41,10 @@ type CustomField = { name: string; description: string };
 
 export default function EnrichPage() {
   const params    = useParams();
-  const type      = params.type as "company" | "people";
+  const type      = params.type as EnrichType;
   const router    = useRouter();
   const isCompany = type === "company";
+  const isDM      = type === "decision_maker";
 
   const [csvContent,       setCsvContent]       = useState("");
   const [fileName,         setFileName]         = useState("");
@@ -83,7 +88,7 @@ export default function EnrichPage() {
     setError("");
   };
 
-  const switchTab = (newType: "company" | "people") => {
+  const switchTab = (newType: EnrichType) => {
     if (newType === type) return;
     resetForm();
     router.push(`/enrich/${newType}`);
@@ -221,8 +226,8 @@ export default function EnrichPage() {
         <div className="flex items-baseline gap-3 overflow-hidden">
           <span className="text-3xl font-serif font-bold text-gray-900 tracking-tight">Enrich</span>
           <TextRotate
-            texts={["Company", "People"]}
-            initialIndex={isCompany ? 0 : 1}
+            texts={["Company", "People", "Decision Maker"]}
+            initialIndex={isCompany ? 0 : isDM ? 2 : 1}
             auto={false}
             animatePresenceInitial={true}
             splitBy="characters"
@@ -306,8 +311,17 @@ export default function EnrichPage() {
           {headers.length > 0 && csvContent && (
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                {isCompany ? "Which column contains the company URL?" : "Which column contains the LinkedIn profile URL?"}
+                {isCompany
+                  ? "Which column contains the company URL?"
+                  : isDM
+                  ? "Which column contains the business name?"
+                  : "Which column contains the LinkedIn profile URL?"}
               </label>
+              {isDM && (
+                <p className="text-[11px] text-cloudy mt-1 mb-1.5">
+                  Tip: include the city in the same column (e.g. <span className="font-medium">Joe&apos;s Pizza, Austin TX</span>) so the agent can disambiguate common names.
+                </p>
+              )}
               <select
                 value={identifierColumn}
                 onChange={(e) => setIdentifierColumn(e.target.value)}
