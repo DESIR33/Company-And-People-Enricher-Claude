@@ -46,6 +46,7 @@ export async function enrichRow(
         requestedFields: nonProspeoFields,
         customFieldDefs: job.customFieldDefs ?? [],
         newsParams: job.newsParams,
+        outreachContext: job.outreachContext,
         model: opts.model,
         signal: opts.signal,
       });

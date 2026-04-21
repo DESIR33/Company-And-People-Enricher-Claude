@@ -23,6 +23,7 @@ function init(db: Database.Database): void {
       requested_fields TEXT NOT NULL,
       custom_field_defs TEXT NOT NULL,
       news_params TEXT,
+      outreach_context TEXT,
       total_rows INTEGER NOT NULL,
       processed_rows INTEGER NOT NULL DEFAULT 0,
       error TEXT
@@ -41,6 +42,13 @@ function init(db: Database.Database): void {
       FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
     );
   `);
+  // Backfill new columns on pre-existing databases.
+  const jobColumns = new Set(
+    (db.prepare(`PRAGMA table_info(jobs)`).all() as { name: string }[]).map((c) => c.name)
+  );
+  if (!jobColumns.has("outreach_context")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN outreach_context TEXT`);
+  }
   // Jobs that were in flight when the process died can never resume — their
   // workers and abort controllers are gone. Mark them failed so the UI can
   // tell the user instead of leaving them stuck at "processing".

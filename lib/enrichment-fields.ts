@@ -74,6 +74,16 @@ export const COMPANY_FIELD_GROUPS: FieldGroup[] = [
       },
     ],
   },
+  {
+    label: "Outreach",
+    fields: [
+      {
+        key: "first_line",
+        label: "Personalized First Line",
+        description: "A one-sentence opener you can paste into an outreach email, DM, or LinkedIn message. References something concrete from the research (recent news, funding, hiring, a new location, tech stack, etc.) and is written in a casual first-person tone. Works best when paired with other enriched fields so the agent has material to reference.",
+      },
+    ],
+  },
 ];
 
 export const PEOPLE_FIELD_GROUPS: FieldGroup[] = [
@@ -97,6 +107,16 @@ export const PEOPLE_FIELD_GROUPS: FieldGroup[] = [
       { key: "linkedin_url",      label: "LinkedIn URL",      description: "LinkedIn profile URL" },
       { key: "linkedin_headline", label: "LinkedIn Headline", description: "Headline text from their LinkedIn profile" },
       { key: "location",          label: "Location",          description: "City and country where they are based" },
+    ],
+  },
+  {
+    label: "Outreach",
+    fields: [
+      {
+        key: "first_line",
+        label: "Personalized First Line",
+        description: "A one-sentence opener you can paste into an outreach email, DM, or LinkedIn message. References something concrete from the research (recent role change, tenure, company news, headline, etc.) and is written in a casual first-person tone. Works best when paired with other enriched fields so the agent has material to reference.",
+      },
     ],
   },
 ];

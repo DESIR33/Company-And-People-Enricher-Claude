@@ -25,6 +25,7 @@ export type Job = {
   requestedFields: string[];
   customFieldDefs: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
+  outreachContext?: string;
   rows: EnrichmentRow[];
   totalRows: number;
   processedRows: number;
@@ -66,6 +67,7 @@ type JobMetaRow = {
   requested_fields: string;
   custom_field_defs: string;
   news_params: string | null;
+  outreach_context: string | null;
   total_rows: number;
   processed_rows: number;
   error: string | null;
@@ -95,6 +97,7 @@ function jobFromDb(meta: JobMetaRow, rows: JobRowRow[]): Job {
     requestedFields: JSON.parse(meta.requested_fields),
     customFieldDefs: JSON.parse(meta.custom_field_defs),
     newsParams: meta.news_params ? JSON.parse(meta.news_params) : undefined,
+    outreachContext: meta.outreach_context ?? undefined,
     rows: rows.map(rowFromDb),
     totalRows: meta.total_rows,
     processedRows: meta.processed_rows,
@@ -108,6 +111,7 @@ export function createJob(params: {
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
+  outreachContext?: string;
   rows: Record<string, string>[];
 }): Job {
   const db = getDb();
@@ -117,9 +121,9 @@ export function createJob(params: {
 
   const insertMeta = db.prepare(`
     INSERT INTO jobs (id, type, status, created_at, updated_at, identifier_column,
-      requested_fields, custom_field_defs, news_params, total_rows, processed_rows)
+      requested_fields, custom_field_defs, news_params, outreach_context, total_rows, processed_rows)
     VALUES (@id, @type, 'pending', @now, @now, @identifierColumn,
-      @requestedFields, @customFieldDefs, @newsParams, @totalRows, 0)
+      @requestedFields, @customFieldDefs, @newsParams, @outreachContext, @totalRows, 0)
   `);
   const insertRow = db.prepare(`
     INSERT INTO job_rows (job_id, row_index, original_data, enriched_data, status)
@@ -135,6 +139,7 @@ export function createJob(params: {
       requestedFields: JSON.stringify(params.requestedFields),
       customFieldDefs: JSON.stringify(customFieldDefs),
       newsParams: params.newsParams ? JSON.stringify(params.newsParams) : null,
+      outreachContext: params.outreachContext?.trim() ? params.outreachContext.trim() : null,
       totalRows: params.rows.length,
     });
     for (let i = 0; i < params.rows.length; i++) {

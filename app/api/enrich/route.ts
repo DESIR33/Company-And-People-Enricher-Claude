@@ -46,6 +46,7 @@ const EnrichRequestSchema = z.object({
     .max(200, "Too many requested fields"),
   customFieldDefs: z.array(CustomFieldDefSchema).max(50).optional().default([]),
   newsParams: NewsParamsSchema.optional(),
+  outreachContext: z.string().trim().max(500, "outreachContext is too long").optional(),
 });
 
 async function processJob(jobId: string): Promise<void> {
@@ -106,7 +107,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid request", issues }, { status: 400 });
   }
 
-  const { type, csvContent, identifierColumn, requestedFields, customFieldDefs, newsParams } = parsed.data;
+  const { type, csvContent, identifierColumn, requestedFields, customFieldDefs, newsParams, outreachContext } = parsed.data;
 
   try {
     const { headers, rows } = parseCSV(csvContent);
@@ -172,7 +173,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const job = createJob({ type, identifierColumn, requestedFields, customFieldDefs, newsParams, rows });
+    const job = createJob({ type, identifierColumn, requestedFields, customFieldDefs, newsParams, outreachContext, rows });
 
     processJob(job.id).catch((err) => {
       console.error(`processJob failed for ${job.id}:`, err);

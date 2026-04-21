@@ -9,6 +9,7 @@ type AgentEnrichParams = {
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
+  outreachContext?: string;
   model?: string;
   signal?: AbortSignal;
 };
@@ -87,11 +88,25 @@ function buildPromptParts(params: AgentEnrichParams): PromptParts {
         `\nUse "NA" if fewer articles exist within the timeframe.`
       : "";
 
+  const outreachContext = params.outreachContext?.trim();
+  const firstLineSection = params.requestedFields.includes("first_line")
+    ? `\nFIRST LINE (outreach opener):\n` +
+      `Generate ONE SENTENCE (max ~25 words) that could be pasted as the opening line of an outreach email, DM, or LinkedIn message. Rules:\n` +
+      `- Reference something SPECIFIC you found in your research — a recent funding round, a new location, a hire, a product launch, a news headline, a tenure milestone, a tech choice, a job title change. Generic "Hi, I saw your company is in X industry" style openers are NOT acceptable.\n` +
+      `- Write in first person, casual and curious, not salesy. Think "how a human would actually open a cold message", not a templated mail merge.\n` +
+      `- Vary openings. AVOID the overused "I noticed…" / "Hope you're well…" / "Quick question…" templates.\n` +
+      `- Do NOT pitch, do NOT ask for a meeting, do NOT include greetings like "Hi [Name]," — just the one sentence that comes right after the greeting.\n` +
+      (outreachContext
+        ? `- The sender's context / angle is: "${outreachContext}". Lightly connect your opener to something in the research that would make this angle relevant, WITHOUT pitching the product.\n`
+        : "") +
+      `- If nothing concrete is known, return "NA" rather than a generic line.`
+    : "";
+
   if (params.type === "company") {
     const systemPrompt = `You are a company research specialist. Find specific information about a company.
 
 FIELDS TO FIND:
-${fieldsSection}${newsSection}
+${fieldsSection}${newsSection}${firstLineSection}
 
 INSTRUCTIONS:
 1. Use WebSearch to find the company's website and LinkedIn page
@@ -116,7 +131,7 @@ Use "NA" for any field you cannot find.
   const systemPrompt = `You are a professional researcher specializing in business professionals.
 
 FIELDS TO FIND:
-${fieldsSection}${newsSection}
+${fieldsSection}${newsSection}${firstLineSection}
 
 INSTRUCTIONS:
 1. Use WebFetch to load the LinkedIn profile URL directly

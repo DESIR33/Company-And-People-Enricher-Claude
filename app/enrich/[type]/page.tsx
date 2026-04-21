@@ -56,6 +56,9 @@ export default function EnrichPage() {
   const [newsCount,     setNewsCount]     = useState(3);
   const [newsTimeframe, setNewsTimeframe] = useState("last 3 months");
 
+  // Outreach first-line context
+  const [outreachContext, setOutreachContext] = useState("");
+
   // Add field modal
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalName,   setModalName]   = useState("");
@@ -76,6 +79,7 @@ export default function EnrichPage() {
     setNewsSelected(false);
     setNewsCount(3);
     setNewsTimeframe("last 3 months");
+    setOutreachContext("");
     setError("");
   };
 
@@ -186,6 +190,10 @@ export default function EnrichPage() {
           requestedFields: [...selectedFields, ...customFields.map((f) => f.name), ...newsKeys],
           customFieldDefs: customFields,
           newsParams: newsSelected ? { count: newsCount, timeframe: newsTimeframe } : undefined,
+          outreachContext:
+            selectedFields.includes("first_line") && outreachContext.trim().length > 0
+              ? outreachContext.trim()
+              : undefined,
         }),
       });
       const data = await res.json();
@@ -504,6 +512,29 @@ export default function EnrichPage() {
           </button>
         </div>
       </div>
+
+      {/* Outreach context — shown only when first-line field is selected */}
+      {selectedFields.includes("first_line") && (
+        <div className="bg-white border border-cloudy/20 rounded-xl p-5 space-y-2">
+          <div className="flex items-baseline justify-between">
+            <label htmlFor="outreach-context" className="text-sm font-semibold text-gray-900">
+              Outreach context <span className="text-cloudy font-normal">(optional)</span>
+            </label>
+            <span className="text-xs text-cloudy">{outreachContext.length}/500</span>
+          </div>
+          <p className="text-xs text-cloudy">
+            One or two sentences about what you&apos;re selling or your angle — the agent weaves this into the first line without turning it into a pitch.
+          </p>
+          <textarea
+            id="outreach-context"
+            value={outreachContext}
+            onChange={(e) => setOutreachContext(e.target.value.slice(0, 500))}
+            rows={3}
+            placeholder="e.g. I run a service that helps home-services businesses turn missed phone calls into booked jobs via text."
+            className="w-full border border-cloudy/40 rounded-md px-3 py-2 text-sm placeholder:text-cloudy/70 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition resize-y"
+          />
+        </div>
+      )}
 
       {/* Error */}
       {error && (
