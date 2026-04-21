@@ -28,6 +28,19 @@ export type Job = {
 };
 
 const store = new Map<string, Job>();
+const abortControllers = new Map<string, AbortController>();
+
+export function setJobAbortController(jobId: string, controller: AbortController): void {
+  abortControllers.set(jobId, controller);
+}
+
+export function abortJob(jobId: string): void {
+  abortControllers.get(jobId)?.abort();
+}
+
+export function clearJobAbortController(jobId: string): void {
+  abortControllers.delete(jobId);
+}
 
 export function createJob(params: {
   type: "company" | "people";

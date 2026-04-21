@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getJob, updateJob } from "@/lib/job-store";
+import { getJob, updateJob, abortJob } from "@/lib/job-store";
 
 export async function DELETE(
   _req: NextRequest,
@@ -14,5 +14,6 @@ export async function DELETE(
   }
 
   updateJob(jobId, { status: "cancelled" });
+  abortJob(jobId);
   return NextResponse.json({ ok: true });
 }

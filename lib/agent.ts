@@ -10,6 +10,7 @@ type AgentEnrichParams = {
   customFieldDefs?: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
   model?: string;
+  signal?: AbortSignal;
 };
 
 const NEWS_KEY_RE = /^recent_news_\d+$/;
@@ -180,6 +181,12 @@ export async function enrichWithAgent(
   let rawResult = "";
   let costUsd = 0;
 
+  const abortController = new AbortController();
+  if (params.signal) {
+    if (params.signal.aborted) abortController.abort();
+    else params.signal.addEventListener("abort", () => abortController.abort(), { once: true });
+  }
+
   try {
     for await (const message of query({
       prompt: buildPrompt({ ...params, requestedFields: nonProspeoFields }),
@@ -188,6 +195,7 @@ export async function enrichWithAgent(
         allowedTools: ["WebSearch", "WebFetch"],
         maxTurns: params.type === "people" ? 15 : 10,
         permissionMode: "acceptEdits",
+        abortController,
       },
     })) {
       if (typeof message === "object" && message !== null && "result" in message) {
@@ -197,6 +205,7 @@ export async function enrichWithAgent(
       }
     }
   } catch (err) {
+    if (params.signal?.aborted) throw err;
     console.error("Agent error:", err);
     return { fields: Object.fromEntries(nonProspeoFields.map((f) => [f, ""])), costUsd: 0 };
   }

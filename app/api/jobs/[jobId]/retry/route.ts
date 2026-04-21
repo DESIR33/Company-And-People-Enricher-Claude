@@ -25,7 +25,7 @@ export async function POST(
   updateRow(jobId, rowIndex, { status: "processing", error: undefined });
   updateJob(jobId, { status: "processing" });
 
-  enrichRow(job, rowIndex, model)
+  enrichRow(job, rowIndex, { model })
     .catch((err) => console.error(`Retry failed for job ${jobId} row ${rowIndex}:`, err))
     .finally(() => {
       const current = getJob(jobId);

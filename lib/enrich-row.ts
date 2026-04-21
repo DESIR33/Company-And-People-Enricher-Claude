@@ -8,7 +8,7 @@ const NEWS_KEY_RE = /^recent_news_\d+$/;
 export async function enrichRow(
   job: Job,
   rowIndex: number,
-  model?: string
+  opts: { model?: string; signal?: AbortSignal } = {}
 ): Promise<void> {
   const jobId = job.id;
   const row = job.rows[rowIndex];
@@ -44,22 +44,27 @@ export async function enrichRow(
         requestedFields: nonProspeoFields,
         customFieldDefs: job.customFieldDefs ?? [],
         newsParams: job.newsParams,
-        model,
+        model: opts.model,
+        signal: opts.signal,
       });
       enrichedData = result.fields;
       rowCostUsd = result.costUsd;
     }
 
     if (job.type === "people" && job.requestedFields.includes("work_email")) {
-      const prospeoResult = await findWorkEmail({ linkedinUrl: identifier });
+      const prospeoResult = await findWorkEmail({
+        linkedinUrl: identifier,
+        signal: opts.signal,
+      });
       enrichedData.work_email = prospeoResult.email ?? "";
     }
 
     updateRow(jobId, rowIndex, { status: "done", enrichedData, costUsd: rowCostUsd });
   } catch (err) {
+    const cancelled = opts.signal?.aborted === true;
     updateRow(jobId, rowIndex, {
       status: "error",
-      error: String(err),
+      error: cancelled ? "Cancelled" : String(err),
       enrichedData: {},
     });
   }

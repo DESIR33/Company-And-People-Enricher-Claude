@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseCSV } from "@/lib/csv";
-import { createJob, updateJob, updateRow, getJob, type CustomFieldDef } from "@/lib/job-store";
+import {
+  createJob,
+  updateJob,
+  updateRow,
+  getJob,
+  setJobAbortController,
+  clearJobAbortController,
+  type CustomFieldDef,
+} from "@/lib/job-store";
 import { enrichRow } from "@/lib/enrich-row";
 import { getFields } from "@/lib/enrichment-fields";
 
@@ -15,18 +23,21 @@ async function processJob(jobId: string): Promise<void> {
 
   updateJob(jobId, { status: "processing" });
 
+  const abortController = new AbortController();
+  setJobAbortController(jobId, abortController);
+
   let nextIndex = 0;
 
   async function worker() {
     while (true) {
-      if (getJob(jobId)?.status === "cancelled") return;
+      if (abortController.signal.aborted) return;
 
       const rowIndex = nextIndex++;
       const row = job.rows[rowIndex];
       if (!row) return;
 
       updateRow(jobId, rowIndex, { status: "processing" });
-      await enrichRow(job, rowIndex);
+      await enrichRow(job, rowIndex, { signal: abortController.signal });
 
       const processed = getJob(jobId)!.rows.filter(
         (r) => r.status === "done" || r.status === "error"
@@ -35,7 +46,11 @@ async function processJob(jobId: string): Promise<void> {
     }
   }
 
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  try {
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  } finally {
+    clearJobAbortController(jobId);
+  }
 
   if (getJob(jobId)?.status !== "cancelled") {
     updateJob(jobId, { status: "completed" });
