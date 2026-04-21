@@ -32,3 +32,6 @@ Thumbs.db
 # Misc
 .impeccable.md
 skills-lock.json
+
+# Local SQLite database
+.data/

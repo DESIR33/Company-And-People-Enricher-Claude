@@ -39,6 +39,31 @@ export const COMPANY_FIELD_GROUPS: FieldGroup[] = [
     ],
   },
   {
+    label: "Contact Channels",
+    fields: [
+      {
+        key: "business_phone",
+        label: "Business Phone",
+        description: "Main business phone number in international format when possible (e.g. +14155551234 or (415) 555-1234). Prefer the number published on the company's website or Google Business Profile.",
+      },
+      {
+        key: "instagram_handle",
+        label: "Instagram Handle",
+        description: "Instagram handle the business actively uses, including the leading @ (e.g. @stripe). Prefer accounts with recent posts; skip abandoned profiles.",
+      },
+      {
+        key: "facebook_page",
+        label: "Facebook Page",
+        description: "Full URL to the company's Facebook business page (e.g. https://facebook.com/Stripe). Prefer pages with recent posts over inactive duplicates.",
+      },
+      {
+        key: "google_business_url",
+        label: "Google Business Profile",
+        description: "URL to the company's Google Business Profile (Google Maps place URL, e.g. https://maps.google.com/?cid=... or a goo.gl/maps share link). This is the surface where Google Business messaging lives.",
+      },
+    ],
+  },
+  {
     label: "News & Activity",
     fields: [
       {
@@ -46,6 +71,16 @@ export const COMPANY_FIELD_GROUPS: FieldGroup[] = [
         label: "Recent Company News",
         description: "Latest news articles about the company — configure count and time frame",
         isParameterized: true,
+      },
+    ],
+  },
+  {
+    label: "Outreach",
+    fields: [
+      {
+        key: "first_line",
+        label: "Personalized First Line",
+        description: "A one-sentence opener you can paste into an outreach email, DM, or LinkedIn message. References something concrete from the research (recent news, funding, hiring, a new location, tech stack, etc.) and is written in a casual first-person tone. Works best when paired with other enriched fields so the agent has material to reference.",
       },
     ],
   },
@@ -72,6 +107,16 @@ export const PEOPLE_FIELD_GROUPS: FieldGroup[] = [
       { key: "linkedin_url",      label: "LinkedIn URL",      description: "LinkedIn profile URL" },
       { key: "linkedin_headline", label: "LinkedIn Headline", description: "Headline text from their LinkedIn profile" },
       { key: "location",          label: "Location",          description: "City and country where they are based" },
+    ],
+  },
+  {
+    label: "Outreach",
+    fields: [
+      {
+        key: "first_line",
+        label: "Personalized First Line",
+        description: "A one-sentence opener you can paste into an outreach email, DM, or LinkedIn message. References something concrete from the research (recent role change, tenure, company news, headline, etc.) and is written in a casual first-person tone. Works best when paired with other enriched fields so the agent has material to reference.",
+      },
     ],
   },
 ];

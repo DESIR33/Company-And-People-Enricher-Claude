@@ -3,7 +3,7 @@ type ProspeoResult = {
   verified: boolean;
 };
 
-async function callProspeo(linkedinUrl: string): Promise<ProspeoResult> {
+async function callProspeo(linkedinUrl: string, signal?: AbortSignal): Promise<ProspeoResult> {
   const res = await fetch("https://api.prospeo.io/enrich-person", {
     method: "POST",
     headers: {
@@ -14,6 +14,7 @@ async function callProspeo(linkedinUrl: string): Promise<ProspeoResult> {
       only_verified_email: true,
       data: { linkedin_url: linkedinUrl },
     }),
+    signal,
   });
 
   if (res.status === 429) {
@@ -31,15 +32,20 @@ async function callProspeo(linkedinUrl: string): Promise<ProspeoResult> {
   return { email: null, verified: false };
 }
 
-export async function findWorkEmail(params: { linkedinUrl: string }): Promise<{ email: string | null }> {
+export async function findWorkEmail(params: {
+  linkedinUrl: string;
+  signal?: AbortSignal;
+}): Promise<{ email: string | null }> {
   try {
-    return await callProspeo(params.linkedinUrl);
+    return await callProspeo(params.linkedinUrl, params.signal);
   } catch (err) {
+    if (params.signal?.aborted) throw err;
     if (err instanceof Error && err.message === "RATE_LIMITED") {
       await new Promise((r) => setTimeout(r, 1000));
       try {
-        return await callProspeo(params.linkedinUrl);
-      } catch {
+        return await callProspeo(params.linkedinUrl, params.signal);
+      } catch (retryErr) {
+        if (params.signal?.aborted) throw retryErr;
         return { email: null };
       }
     }

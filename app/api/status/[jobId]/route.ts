@@ -32,6 +32,8 @@ export async function GET(
         enrichedData: r.enrichedData,
         error: r.error,
         costUsd: r.costUsd,
+        cacheReadTokens: r.cacheReadTokens,
+        cacheCreationTokens: r.cacheCreationTokens,
       })),
       error: job.error,
     },

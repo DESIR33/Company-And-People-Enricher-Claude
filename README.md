@@ -16,7 +16,7 @@ Built with [Next.js](https://nextjs.org) and the [Anthropic Claude Agent SDK](ht
 
 ## What It Does
 
-Upload a CSV, pick what fields you want enriched, and the agent does the research for you — in parallel, across up to 50 rows at once.
+Upload a CSV, pick what fields you want enriched, and the agent does the research for you — in parallel, across up to 15 rows at once.
 
 **Company enrichment** finds:
 - Industry & company description
@@ -26,7 +26,9 @@ Upload a CSV, pick what fields you want enriched, and the agent does the researc
 - Total funding amount & most recent funding round amount
 - Key technologies used
 - LinkedIn URL & website URL
+- **Contact channels**: business phone, Instagram handle, Facebook page, Google Business Profile URL — useful for local-business outreach where DMs and Google Business messaging outperform cold email
 - Recent company news (configurable count + time frame)
+- **Personalized first line** — a one-sentence opener grounded in the other research, ready to paste into a cold email or DM. Optional **outreach context** field lets you tell the agent what you're selling so the opener leans the right way without becoming a pitch.
 - Any custom fields you define
 
 **People enrichment** finds:
@@ -35,6 +37,7 @@ Upload a CSV, pick what fields you want enriched, and the agent does the researc
 - LinkedIn headline & LinkedIn URL
 - Location
 - Work email *(via Prospeo.io — optional)*
+- **Personalized first line** — a one-sentence opener grounded in their role, tenure, and recent activity. Same optional outreach-context field as on the company side.
 - Any custom fields you define
 
 ---
@@ -166,7 +169,7 @@ Each article becomes its own column in the output: **Recent News 1**, **Recent N
 
 Click **Start enrichment**. You'll be taken to the results page where you can watch progress in real time.
 
-The agent processes up to **50 rows in parallel**, so even large CSVs complete quickly.
+The agent processes up to **15 rows in parallel**, so even large CSVs complete quickly.
 
 ---
 

@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
 import { COMPANY_FIELDS, PEOPLE_FIELDS, type FieldDefinition } from "./enrichment-fields";
 
 export type CustomFieldDef = { name: string; description: string };
@@ -9,21 +9,55 @@ type AgentEnrichParams = {
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
+  outreachContext?: string;
   model?: string;
+  signal?: AbortSignal;
 };
 
 const NEWS_KEY_RE = /^recent_news_\d+$/;
+const MAX_AGENT_ATTEMPTS = 3;
+const BASE_BACKOFF_MS = 500;
+const MAX_BACKOFF_MS = 8000;
 
-function buildPrompt(params: AgentEnrichParams): string {
+// SDKResultError subtypes we consider transient and worth retrying. Quota /
+// budget / max-turns failures are terminal — retrying burns money to hit the
+// same wall.
+const RETRYABLE_RESULT_SUBTYPES = new Set(["error_during_execution"]);
+
+function backoffDelay(attemptIndex: number): number {
+  const base = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** attemptIndex);
+  const jitter = base * (0.5 + Math.random() * 0.5);
+  return Math.floor(jitter);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+type PromptParts = { systemPrompt: string; userPrompt: string };
+
+function buildPromptParts(params: AgentEnrichParams): PromptParts {
   const allFields = params.type === "company" ? COMPANY_FIELDS : PEOPLE_FIELDS;
   const customFieldDefs = params.customFieldDefs ?? [];
 
-  // Standard (non-news, non-custom) fields
   const standardFields = allFields.filter(
     (f) => params.requestedFields.includes(f.key) && !f.requiresProspeo && !f.isParameterized
   );
 
-  // News fields e.g. recent_news_1, recent_news_2, ...
   const newsFields = params.requestedFields.filter((f) => NEWS_KEY_RE.test(f));
 
   const standardFieldLines = standardFields
@@ -38,7 +72,6 @@ function buildPrompt(params: AgentEnrichParams): string {
 
   const fieldsSection = standardFieldLines + customFieldLines;
 
-  // Build JSON output keys
   const standardKeys = standardFields
     .map((f: FieldDefinition) => `"${f.key}": ""`)
     .join(",\n  ");
@@ -46,7 +79,6 @@ function buildPrompt(params: AgentEnrichParams): string {
   const newsKeys   = newsFields.map((f) => `"${f}": ""`).join(",\n  ");
   const allKeys = [standardKeys, customKeys, newsKeys].filter(Boolean).join(",\n  ");
 
-  // News section for prompt
   const newsSection =
     newsFields.length > 0 && params.newsParams
       ? `\nRECENT NEWS (${params.newsParams.timeframe}, ${params.newsParams.count} article${params.newsParams.count !== 1 ? "s" : ""}):\n` +
@@ -56,11 +88,25 @@ function buildPrompt(params: AgentEnrichParams): string {
         `\nUse "NA" if fewer articles exist within the timeframe.`
       : "";
 
+  const outreachContext = params.outreachContext?.trim();
+  const firstLineSection = params.requestedFields.includes("first_line")
+    ? `\nFIRST LINE (outreach opener):\n` +
+      `Generate ONE SENTENCE (max ~25 words) that could be pasted as the opening line of an outreach email, DM, or LinkedIn message. Rules:\n` +
+      `- Reference something SPECIFIC you found in your research — a recent funding round, a new location, a hire, a product launch, a news headline, a tenure milestone, a tech choice, a job title change. Generic "Hi, I saw your company is in X industry" style openers are NOT acceptable.\n` +
+      `- Write in first person, casual and curious, not salesy. Think "how a human would actually open a cold message", not a templated mail merge.\n` +
+      `- Vary openings. AVOID the overused "I noticed…" / "Hope you're well…" / "Quick question…" templates.\n` +
+      `- Do NOT pitch, do NOT ask for a meeting, do NOT include greetings like "Hi [Name]," — just the one sentence that comes right after the greeting.\n` +
+      (outreachContext
+        ? `- The sender's context / angle is: "${outreachContext}". Lightly connect your opener to something in the research that would make this angle relevant, WITHOUT pitching the product.\n`
+        : "") +
+      `- If nothing concrete is known, return "NA" rather than a generic line.`
+    : "";
+
   if (params.type === "company") {
-    return `You are a company research specialist. Find specific information about a company.
+    const systemPrompt = `You are a company research specialist. Find specific information about a company.
 
 FIELDS TO FIND:
-${fieldsSection}${newsSection}
+${fieldsSection}${newsSection}${firstLineSection}
 
 INSTRUCTIONS:
 1. Use WebSearch to find the company's website and LinkedIn page
@@ -68,6 +114,7 @@ INSTRUCTIONS:
 3. For funding and revenue, search "[company name] funding revenue crunchbase"
 4. For technologies, search "[company name] tech stack" or fetch their jobs page
 5. For news, search "[company name] news [current year]" and use recent results
+6. For contact channels (phone, Instagram, Facebook, Google Business Profile), check the website's footer and contact page first, then search "[company name] [city] google maps" for the Google Business Profile and "[company name] instagram" / "[company name] facebook" for socials. Prefer accounts with recent activity over abandoned ones.
 
 OUTPUT FORMAT:
 Respond with ONLY a valid JSON object. No markdown, no prose, no code fences.
@@ -75,16 +122,16 @@ Use "NA" for any field you cannot find.
 
 {
   ${allKeys}
-}
-
-COMPANY IDENTIFIER: ${params.identifier}
+}`;
+    const userPrompt = `COMPANY IDENTIFIER: ${params.identifier}
 (This is the company's website URL or LinkedIn URL)`;
+    return { systemPrompt, userPrompt };
   }
 
-  return `You are a professional researcher specializing in business professionals.
+  const systemPrompt = `You are a professional researcher specializing in business professionals.
 
 FIELDS TO FIND:
-${fieldsSection}${newsSection}
+${fieldsSection}${newsSection}${firstLineSection}
 
 INSTRUCTIONS:
 1. Use WebFetch to load the LinkedIn profile URL directly
@@ -99,10 +146,10 @@ Use "NA" for any field you cannot find.
 
 {
   ${allKeys}
-}
-
-PERSON IDENTIFIER: ${params.identifier}
+}`;
+  const userPrompt = `PERSON IDENTIFIER: ${params.identifier}
 (This is the person's LinkedIn profile URL)`;
+  return { systemPrompt, userPrompt };
 }
 
 function parseAgentOutput(
@@ -163,7 +210,12 @@ function normalizeFields(
 
 export async function enrichWithAgent(
   params: AgentEnrichParams
-): Promise<{ fields: Record<string, string>; costUsd: number }> {
+): Promise<{
+  fields: Record<string, string>;
+  costUsd: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}> {
   const customFieldNames = new Set((params.customFieldDefs ?? []).map((f) => f.name));
 
   const nonProspeoFields = params.requestedFields.filter((f) => {
@@ -174,33 +226,115 @@ export async function enrichWithAgent(
   });
 
   if (nonProspeoFields.length === 0) {
-    return { fields: {}, costUsd: 0 };
+    return { fields: {}, costUsd: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
   }
 
+  const { systemPrompt, userPrompt } = buildPromptParts({
+    ...params,
+    requestedFields: nonProspeoFields,
+  });
+
+  // Cost and cache counters accumulate across attempts — a failed attempt
+  // that never produced a parseable result still bills tokens.
   let rawResult = "";
   let costUsd = 0;
+  let cacheReadTokens = 0;
+  let cacheCreationTokens = 0;
+  let lastError: unknown;
+  let lastErrorSubtype: string | undefined;
 
-  try {
-    for await (const message of query({
-      prompt: buildPrompt({ ...params, requestedFields: nonProspeoFields }),
-      options: {
-        model: params.model ?? "claude-haiku-4-5-20251001",
-        allowedTools: ["WebSearch", "WebFetch"],
-        maxTurns: params.type === "people" ? 15 : 10,
-        permissionMode: "acceptEdits",
-      },
-    })) {
-      if (typeof message === "object" && message !== null && "result" in message) {
-        const msg = message as { result: unknown; total_cost_usd?: number };
-        rawResult = String(msg.result);
-        costUsd = msg.total_cost_usd ?? 0;
+  for (let attempt = 0; attempt < MAX_AGENT_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      try {
+        await sleep(backoffDelay(attempt - 1), params.signal);
+      } catch {
+        // Aborted during backoff — fall through to the abort handling below.
+        throw lastError ?? new DOMException("Aborted", "AbortError");
       }
+      console.warn(
+        `enrichWithAgent: retrying (attempt ${attempt + 1}/${MAX_AGENT_ATTEMPTS}) after ${
+          lastErrorSubtype ?? (lastError instanceof Error ? lastError.message : "error")
+        }`
+      );
     }
-  } catch (err) {
-    console.error("Agent error:", err);
-    return { fields: Object.fromEntries(nonProspeoFields.map((f) => [f, ""])), costUsd: 0 };
+
+    const attemptAbort = new AbortController();
+    if (params.signal) {
+      if (params.signal.aborted) attemptAbort.abort();
+      else params.signal.addEventListener("abort", () => attemptAbort.abort(), { once: true });
+    }
+
+    let attemptRaw = "";
+    let attemptSubtype: string | undefined;
+
+    try {
+      for await (const message of query({
+        prompt: userPrompt,
+        options: {
+          model: params.model ?? "claude-haiku-4-5-20251001",
+          systemPrompt: [systemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY],
+          allowedTools: ["WebSearch", "WebFetch"],
+          maxTurns: params.type === "people" ? 15 : 10,
+          permissionMode: "acceptEdits",
+          abortController: attemptAbort,
+        },
+      })) {
+        if (
+          typeof message === "object" &&
+          message !== null &&
+          (message as { type?: string }).type === "result"
+        ) {
+          const msg = message as {
+            subtype?: string;
+            result?: unknown;
+            total_cost_usd?: number;
+            modelUsage?: Record<string, { cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>;
+          };
+          costUsd += msg.total_cost_usd ?? 0;
+          for (const usage of Object.values(msg.modelUsage ?? {})) {
+            cacheReadTokens += usage.cacheReadInputTokens ?? 0;
+            cacheCreationTokens += usage.cacheCreationInputTokens ?? 0;
+          }
+          if (msg.subtype === "success") {
+            attemptRaw = String(msg.result ?? "");
+          } else if (msg.subtype) {
+            attemptSubtype = msg.subtype;
+          }
+        }
+      }
+    } catch (err) {
+      if (params.signal?.aborted) throw err;
+      lastError = err;
+      lastErrorSubtype = undefined;
+      continue;
+    }
+
+    if (attemptRaw) {
+      rawResult = attemptRaw;
+      lastError = undefined;
+      lastErrorSubtype = undefined;
+      break;
+    }
+
+    // No usable result from this attempt.
+    lastError = undefined;
+    lastErrorSubtype = attemptSubtype;
+    if (attemptSubtype && !RETRYABLE_RESULT_SUBTYPES.has(attemptSubtype)) {
+      console.warn(`enrichWithAgent: terminal result subtype "${attemptSubtype}", not retrying`);
+      break;
+    }
+  }
+
+  if (!rawResult) {
+    if (lastError) console.error("Agent error:", lastError);
+    return {
+      fields: Object.fromEntries(nonProspeoFields.map((f) => [f, ""])),
+      costUsd,
+      cacheReadTokens,
+      cacheCreationTokens,
+    };
   }
 
   const fields = parseAgentOutput(rawResult, nonProspeoFields);
-  return { fields, costUsd };
+  return { fields, costUsd, cacheReadTokens, cacheCreationTokens };
 }
