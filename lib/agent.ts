@@ -1,4 +1,4 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
 import { COMPANY_FIELDS, PEOPLE_FIELDS, type FieldDefinition } from "./enrichment-fields";
 
 export type CustomFieldDef = { name: string; description: string };
@@ -15,16 +15,16 @@ type AgentEnrichParams = {
 
 const NEWS_KEY_RE = /^recent_news_\d+$/;
 
-function buildPrompt(params: AgentEnrichParams): string {
+type PromptParts = { systemPrompt: string; userPrompt: string };
+
+function buildPromptParts(params: AgentEnrichParams): PromptParts {
   const allFields = params.type === "company" ? COMPANY_FIELDS : PEOPLE_FIELDS;
   const customFieldDefs = params.customFieldDefs ?? [];
 
-  // Standard (non-news, non-custom) fields
   const standardFields = allFields.filter(
     (f) => params.requestedFields.includes(f.key) && !f.requiresProspeo && !f.isParameterized
   );
 
-  // News fields e.g. recent_news_1, recent_news_2, ...
   const newsFields = params.requestedFields.filter((f) => NEWS_KEY_RE.test(f));
 
   const standardFieldLines = standardFields
@@ -39,7 +39,6 @@ function buildPrompt(params: AgentEnrichParams): string {
 
   const fieldsSection = standardFieldLines + customFieldLines;
 
-  // Build JSON output keys
   const standardKeys = standardFields
     .map((f: FieldDefinition) => `"${f.key}": ""`)
     .join(",\n  ");
@@ -47,7 +46,6 @@ function buildPrompt(params: AgentEnrichParams): string {
   const newsKeys   = newsFields.map((f) => `"${f}": ""`).join(",\n  ");
   const allKeys = [standardKeys, customKeys, newsKeys].filter(Boolean).join(",\n  ");
 
-  // News section for prompt
   const newsSection =
     newsFields.length > 0 && params.newsParams
       ? `\nRECENT NEWS (${params.newsParams.timeframe}, ${params.newsParams.count} article${params.newsParams.count !== 1 ? "s" : ""}):\n` +
@@ -58,7 +56,7 @@ function buildPrompt(params: AgentEnrichParams): string {
       : "";
 
   if (params.type === "company") {
-    return `You are a company research specialist. Find specific information about a company.
+    const systemPrompt = `You are a company research specialist. Find specific information about a company.
 
 FIELDS TO FIND:
 ${fieldsSection}${newsSection}
@@ -76,13 +74,13 @@ Use "NA" for any field you cannot find.
 
 {
   ${allKeys}
-}
-
-COMPANY IDENTIFIER: ${params.identifier}
+}`;
+    const userPrompt = `COMPANY IDENTIFIER: ${params.identifier}
 (This is the company's website URL or LinkedIn URL)`;
+    return { systemPrompt, userPrompt };
   }
 
-  return `You are a professional researcher specializing in business professionals.
+  const systemPrompt = `You are a professional researcher specializing in business professionals.
 
 FIELDS TO FIND:
 ${fieldsSection}${newsSection}
@@ -100,10 +98,10 @@ Use "NA" for any field you cannot find.
 
 {
   ${allKeys}
-}
-
-PERSON IDENTIFIER: ${params.identifier}
+}`;
+  const userPrompt = `PERSON IDENTIFIER: ${params.identifier}
 (This is the person's LinkedIn profile URL)`;
+  return { systemPrompt, userPrompt };
 }
 
 function parseAgentOutput(
@@ -187,11 +185,17 @@ export async function enrichWithAgent(
     else params.signal.addEventListener("abort", () => abortController.abort(), { once: true });
   }
 
+  const { systemPrompt, userPrompt } = buildPromptParts({
+    ...params,
+    requestedFields: nonProspeoFields,
+  });
+
   try {
     for await (const message of query({
-      prompt: buildPrompt({ ...params, requestedFields: nonProspeoFields }),
+      prompt: userPrompt,
       options: {
         model: params.model ?? "claude-haiku-4-5-20251001",
+        systemPrompt: [systemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY],
         allowedTools: ["WebSearch", "WebFetch"],
         maxTurns: params.type === "people" ? 15 : 10,
         permissionMode: "acceptEdits",
