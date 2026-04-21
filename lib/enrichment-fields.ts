@@ -39,6 +39,31 @@ export const COMPANY_FIELD_GROUPS: FieldGroup[] = [
     ],
   },
   {
+    label: "Contact Channels",
+    fields: [
+      {
+        key: "business_phone",
+        label: "Business Phone",
+        description: "Main business phone number in international format when possible (e.g. +14155551234 or (415) 555-1234). Prefer the number published on the company's website or Google Business Profile.",
+      },
+      {
+        key: "instagram_handle",
+        label: "Instagram Handle",
+        description: "Instagram handle the business actively uses, including the leading @ (e.g. @stripe). Prefer accounts with recent posts; skip abandoned profiles.",
+      },
+      {
+        key: "facebook_page",
+        label: "Facebook Page",
+        description: "Full URL to the company's Facebook business page (e.g. https://facebook.com/Stripe). Prefer pages with recent posts over inactive duplicates.",
+      },
+      {
+        key: "google_business_url",
+        label: "Google Business Profile",
+        description: "URL to the company's Google Business Profile (Google Maps place URL, e.g. https://maps.google.com/?cid=... or a goo.gl/maps share link). This is the surface where Google Business messaging lives.",
+      },
+    ],
+  },
+  {
     label: "News & Activity",
     fields: [
       {

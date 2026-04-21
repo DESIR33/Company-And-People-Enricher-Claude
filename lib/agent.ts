@@ -99,6 +99,7 @@ INSTRUCTIONS:
 3. For funding and revenue, search "[company name] funding revenue crunchbase"
 4. For technologies, search "[company name] tech stack" or fetch their jobs page
 5. For news, search "[company name] news [current year]" and use recent results
+6. For contact channels (phone, Instagram, Facebook, Google Business Profile), check the website's footer and contact page first, then search "[company name] [city] google maps" for the Google Business Profile and "[company name] instagram" / "[company name] facebook" for socials. Prefer accounts with recent activity over abandoned ones.
 
 OUTPUT FORMAT:
 Respond with ONLY a valid JSON object. No markdown, no prose, no code fences.

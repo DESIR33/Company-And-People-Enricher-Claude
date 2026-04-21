@@ -26,6 +26,7 @@ Upload a CSV, pick what fields you want enriched, and the agent does the researc
 - Total funding amount & most recent funding round amount
 - Key technologies used
 - LinkedIn URL & website URL
+- **Contact channels**: business phone, Instagram handle, Facebook page, Google Business Profile URL — useful for local-business outreach where DMs and Google Business messaging outperform cold email
 - Recent company news (configurable count + time frame)
 - Any custom fields you define
 
