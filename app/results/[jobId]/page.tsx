@@ -23,6 +23,7 @@ import {
   Clock,
   Building2,
   Users,
+  UserSearch,
   StopCircle,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -43,7 +44,7 @@ type JobRow = {
 
 type JobData = {
   jobId: string;
-  type: "company" | "people";
+  type: "company" | "people" | "decision_maker";
   status: "pending" | "processing" | "completed" | "failed" | "cancelled";
   totalRows: number;
   processedRows: number;
@@ -331,8 +332,14 @@ export default function ResultsPage() {
   const isRunning  = jobData.status === "processing" || jobData.status === "pending";
   const doneCount  = jobData.rows.filter((r) => r.status === "done").length;
   const errorCount = jobData.rows.filter((r) => r.status === "error").length;
-  const TypeIcon   = jobData.type === "company" ? Building2 : Users;
-  const typeLabel  = jobData.type === "company" ? "Company" : "People";
+  const TypeIcon   =
+    jobData.type === "company" ? Building2
+    : jobData.type === "people" ? Users
+    : UserSearch;
+  const typeLabel  =
+    jobData.type === "company" ? "Company"
+    : jobData.type === "people" ? "People"
+    : "Decision Maker";
 
   const cacheReadTotal     = jobData.rows.reduce((s, r) => s + (r.cacheReadTokens ?? 0), 0);
   const cacheCreationTotal = jobData.rows.reduce((s, r) => s + (r.cacheCreationTokens ?? 0), 0);

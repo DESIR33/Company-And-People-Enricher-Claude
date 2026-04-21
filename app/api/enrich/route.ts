@@ -37,7 +37,7 @@ const NewsParamsSchema = z.object({
 });
 
 const EnrichRequestSchema = z.object({
-  type: z.enum(["company", "people"]),
+  type: z.enum(["company", "people", "decision_maker"]),
   csvContent: z.string().min(1, "csvContent is required"),
   identifierColumn: z.string().min(1, "identifierColumn is required"),
   requestedFields: z
