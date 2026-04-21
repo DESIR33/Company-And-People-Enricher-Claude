@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseCSV } from "@/lib/csv";
 import { createJob, updateJob, updateRow, getJob, type CustomFieldDef } from "@/lib/job-store";
-import { enrichWithAgent } from "@/lib/agent";
-import { findWorkEmail } from "@/lib/prospeo";
+import { enrichRow } from "@/lib/enrich-row";
 import { getFields } from "@/lib/enrichment-fields";
 
 const MAX_ROWS = 200;
@@ -12,12 +11,9 @@ const NEWS_KEY_RE = /^recent_news_\d+$/;
 async function processJob(jobId: string): Promise<void> {
   const jobMaybe = getJob(jobId);
   if (!jobMaybe) return;
-  const job = jobMaybe; // captured as Job (not Job | undefined) so closures below stay typed
+  const job = jobMaybe;
 
   updateJob(jobId, { status: "processing" });
-
-  const validFieldKeys   = new Set(getFields(job.type).map((f) => f.key));
-  const customFieldNames = new Set((job.customFieldDefs ?? []).map((f) => f.name));
 
   let nextIndex = 0;
 
@@ -30,53 +26,7 @@ async function processJob(jobId: string): Promise<void> {
       if (!row) return;
 
       updateRow(jobId, rowIndex, { status: "processing" });
-
-      const identifier = row.originalData[job.identifierColumn];
-
-      if (!identifier || identifier.trim() === "") {
-        updateRow(jobId, rowIndex, {
-          status: "error",
-          error: "Missing identifier value",
-          enrichedData: {},
-        });
-      } else {
-        try {
-          const nonProspeoFields = job.requestedFields.filter(
-            (f) =>
-              (validFieldKeys.has(f) || customFieldNames.has(f) || NEWS_KEY_RE.test(f)) &&
-              f !== "work_email"
-          );
-
-          let enrichedData: Record<string, string> = {};
-
-          let rowCostUsd = 0;
-
-          if (nonProspeoFields.length > 0) {
-            const result = await enrichWithAgent({
-              type: job.type,
-              identifier: identifier.trim(),
-              requestedFields: nonProspeoFields,
-              customFieldDefs: job.customFieldDefs ?? [],
-              newsParams: job.newsParams,
-            });
-            enrichedData = result.fields;
-            rowCostUsd = result.costUsd;
-          }
-
-          if (job.type === "people" && job.requestedFields.includes("work_email")) {
-            const prospeoResult = await findWorkEmail({ linkedinUrl: identifier.trim() });
-            enrichedData.work_email = prospeoResult.email ?? "";
-          }
-
-          updateRow(jobId, rowIndex, { status: "done", enrichedData, costUsd: rowCostUsd });
-        } catch (err) {
-          updateRow(jobId, rowIndex, {
-            status: "error",
-            error: String(err),
-            enrichedData: {},
-          });
-        }
-      }
+      await enrichRow(job, rowIndex);
 
       const processed = getJob(jobId)!.rows.filter(
         (r) => r.status === "done" || r.status === "error"
