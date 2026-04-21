@@ -162,7 +162,12 @@ function normalizeFields(
 
 export async function enrichWithAgent(
   params: AgentEnrichParams
-): Promise<{ fields: Record<string, string>; costUsd: number }> {
+): Promise<{
+  fields: Record<string, string>;
+  costUsd: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}> {
   const customFieldNames = new Set((params.customFieldDefs ?? []).map((f) => f.name));
 
   const nonProspeoFields = params.requestedFields.filter((f) => {
@@ -173,11 +178,13 @@ export async function enrichWithAgent(
   });
 
   if (nonProspeoFields.length === 0) {
-    return { fields: {}, costUsd: 0 };
+    return { fields: {}, costUsd: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
   }
 
   let rawResult = "";
   let costUsd = 0;
+  let cacheReadTokens = 0;
+  let cacheCreationTokens = 0;
 
   const abortController = new AbortController();
   if (params.signal) {
@@ -203,17 +210,30 @@ export async function enrichWithAgent(
       },
     })) {
       if (typeof message === "object" && message !== null && "result" in message) {
-        const msg = message as { result: unknown; total_cost_usd?: number };
+        const msg = message as {
+          result: unknown;
+          total_cost_usd?: number;
+          modelUsage?: Record<string, { cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>;
+        };
         rawResult = String(msg.result);
         costUsd = msg.total_cost_usd ?? 0;
+        for (const usage of Object.values(msg.modelUsage ?? {})) {
+          cacheReadTokens += usage.cacheReadInputTokens ?? 0;
+          cacheCreationTokens += usage.cacheCreationInputTokens ?? 0;
+        }
       }
     }
   } catch (err) {
     if (params.signal?.aborted) throw err;
     console.error("Agent error:", err);
-    return { fields: Object.fromEntries(nonProspeoFields.map((f) => [f, ""])), costUsd: 0 };
+    return {
+      fields: Object.fromEntries(nonProspeoFields.map((f) => [f, ""])),
+      costUsd: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    };
   }
 
   const fields = parseAgentOutput(rawResult, nonProspeoFields);
-  return { fields, costUsd };
+  return { fields, costUsd, cacheReadTokens, cacheCreationTokens };
 }

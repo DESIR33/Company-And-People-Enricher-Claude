@@ -37,6 +37,8 @@ type JobRow = {
   enrichedData: Record<string, string>;
   error?: string;
   costUsd?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
 };
 
 type JobData = {
@@ -279,6 +281,13 @@ export default function ResultsPage() {
   const TypeIcon   = jobData.type === "company" ? Building2 : Users;
   const typeLabel  = jobData.type === "company" ? "Company" : "People";
 
+  const cacheReadTotal     = jobData.rows.reduce((s, r) => s + (r.cacheReadTokens ?? 0), 0);
+  const cacheCreationTotal = jobData.rows.reduce((s, r) => s + (r.cacheCreationTokens ?? 0), 0);
+  const cachedTokensTotal  = cacheReadTotal + cacheCreationTotal;
+  const cacheHitRate       = cachedTokensTotal > 0
+    ? Math.round((cacheReadTotal / cachedTokensTotal) * 100)
+    : 0;
+
   return (
     <div className="flex flex-col min-h-screen">
       {/* Progress strip */}
@@ -303,6 +312,17 @@ export default function ResultsPage() {
                   {doneCount > 0 && <span className="text-xs text-green-600 font-medium">{doneCount} enriched</span>}
                   {doneCount > 0 && errorCount > 0 && <span className="text-cloudy/40">·</span>}
                   {errorCount > 0 && <span className="text-xs text-red-500 font-medium">{errorCount} failed</span>}
+                  {cachedTokensTotal > 0 && (
+                    <>
+                      <span className="text-cloudy/40">·</span>
+                      <span
+                        className="text-xs text-cloudy font-medium"
+                        title={`${cacheReadTotal.toLocaleString()} cache read / ${cacheCreationTotal.toLocaleString()} cache creation input tokens`}
+                      >
+                        {cacheHitRate}% cache hit
+                      </span>
+                    </>
+                  )}
                 </>
               ) : (
                 <span className="text-xs text-cloudy flex items-center gap-1.5">

@@ -16,7 +16,7 @@ Built with [Next.js](https://nextjs.org) and the [Anthropic Claude Agent SDK](ht
 
 ## What It Does
 
-Upload a CSV, pick what fields you want enriched, and the agent does the research for you — in parallel, across up to 50 rows at once.
+Upload a CSV, pick what fields you want enriched, and the agent does the research for you — in parallel, across up to 15 rows at once.
 
 **Company enrichment** finds:
 - Industry & company description
@@ -166,7 +166,7 @@ Each article becomes its own column in the output: **Recent News 1**, **Recent N
 
 Click **Start enrichment**. You'll be taken to the results page where you can watch progress in real time.
 
-The agent processes up to **50 rows in parallel**, so even large CSVs complete quickly.
+The agent processes up to **15 rows in parallel**, so even large CSVs complete quickly.
 
 ---
 

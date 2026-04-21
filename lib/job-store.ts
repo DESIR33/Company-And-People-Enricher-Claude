@@ -9,6 +9,8 @@ export type EnrichmentRow = {
   status: "pending" | "processing" | "done" | "error";
   error?: string;
   costUsd?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
 };
 
 export type Job = {

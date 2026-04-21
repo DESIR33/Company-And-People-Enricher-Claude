@@ -36,6 +36,8 @@ export async function enrichRow(
   try {
     let enrichedData: Record<string, string> = {};
     let rowCostUsd = 0;
+    let cacheReadTokens = 0;
+    let cacheCreationTokens = 0;
 
     if (nonProspeoFields.length > 0) {
       const result = await enrichWithAgent({
@@ -49,6 +51,8 @@ export async function enrichRow(
       });
       enrichedData = result.fields;
       rowCostUsd = result.costUsd;
+      cacheReadTokens = result.cacheReadTokens;
+      cacheCreationTokens = result.cacheCreationTokens;
     }
 
     if (job.type === "people" && job.requestedFields.includes("work_email")) {
@@ -59,7 +63,13 @@ export async function enrichRow(
       enrichedData.work_email = prospeoResult.email ?? "";
     }
 
-    updateRow(jobId, rowIndex, { status: "done", enrichedData, costUsd: rowCostUsd });
+    updateRow(jobId, rowIndex, {
+      status: "done",
+      enrichedData,
+      costUsd: rowCostUsd,
+      cacheReadTokens,
+      cacheCreationTokens,
+    });
   } catch (err) {
     const cancelled = opts.signal?.aborted === true;
     updateRow(jobId, rowIndex, {
