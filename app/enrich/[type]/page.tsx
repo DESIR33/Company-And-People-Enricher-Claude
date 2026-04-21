@@ -529,7 +529,7 @@ export default function EnrichPage() {
         />
         {rowCount > 0 && totalFieldCount > 0 && (
           <span className="text-xs text-cloudy">
-            {rowCount} rows · ~{Math.max(1, Math.ceil(rowCount * 1.5))} min estimated
+            {rowCount} rows
           </span>
         )}
       </div>

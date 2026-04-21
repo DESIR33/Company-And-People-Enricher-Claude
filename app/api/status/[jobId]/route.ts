@@ -31,6 +31,7 @@ export async function GET(
         originalData: r.originalData,
         enrichedData: r.enrichedData,
         error: r.error,
+        costUsd: r.costUsd,
       })),
       error: job.error,
     },

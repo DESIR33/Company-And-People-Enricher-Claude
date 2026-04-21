@@ -36,6 +36,7 @@ type JobRow = {
   originalData: Record<string, string>;
   enrichedData: Record<string, string>;
   error?: string;
+  costUsd?: number;
 };
 
 type JobData = {
@@ -50,6 +51,12 @@ type JobData = {
   rows: JobRow[];
   error?: string;
 };
+
+const MODEL_OPTIONS = [
+  { label: "Haiku 4.5 (default)", value: "claude-haiku-4-5-20251001" },
+  { label: "Sonnet 4.6",          value: "claude-sonnet-4-6" },
+  { label: "Opus 4.7",            value: "claude-opus-4-7" },
+] as const;
 
 function RowStatusIcon({ status }: { status: RowStatus }) {
   if (status === "done")       return <CheckCircle2 className="w-3.5 h-3.5 text-green-500" strokeWidth={2} />;
@@ -71,6 +78,9 @@ export default function ResultsPage() {
   const [globalFilter, setGlobalFilter] = useState("");
   const [sorting,      setSorting]      = useState<SortingState>([]);
   const [cancelling,   setCancelling]   = useState(false);
+  const [retryingRows, setRetryingRows] = useState<Set<number>>(new Set());
+  const [retryModel,   setRetryModel]   = useState<Record<number, string>>({});
+  const [pollVersion,  setPollVersion]  = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -88,7 +98,22 @@ export default function ResultsPage() {
     }
     poll();
     return () => { active = false; };
-  }, [jobId]);
+  }, [jobId, pollVersion]);
+
+  const handleRetry = useCallback(async (rowIndex: number) => {
+    const model = retryModel[rowIndex] ?? MODEL_OPTIONS[0].value;
+    setRetryingRows((prev) => new Set(prev).add(rowIndex));
+    try {
+      await fetch(`/api/jobs/${jobId}/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rowIndex, model }),
+      });
+      setPollVersion((v) => v + 1);
+    } finally {
+      setRetryingRows((prev) => { const s = new Set(prev); s.delete(rowIndex); return s; });
+    }
+  }, [jobId, retryModel]);
 
   const handleCancel = useCallback(async () => {
     if (!jobData || cancelling) return;
@@ -103,12 +128,15 @@ export default function ResultsPage() {
   const tableData = useMemo(() => {
     if (!jobData) return [];
     return jobData.rows.map((row) => ({
-      _status: row.status,
-      _error:  row.error ?? "",
+      _rowIndex: String(row.rowIndex),
+      _status:   row.status,
+      _error:    row.error ?? "",
+      _costUsd:  row.costUsd != null ? String(row.costUsd) : "",
       ...row.originalData,
       ...row.enrichedData,
     }));
   }, [jobData]);
+
 
   const columns = useMemo<ColumnDef<Record<string, string>>[]>(() => {
     if (!jobData || !jobData.rows.length) return [];
@@ -151,8 +179,66 @@ export default function ResultsPage() {
       },
     }));
 
-    return [statusCol, ...originalCols, ...enrichedCols];
-  }, [jobData]);
+    const costCol: ColumnDef<Record<string, string>> = {
+      id: "_costUsd",
+      header: "Cost",
+      accessorKey: "_costUsd",
+      size: 72,
+      enableGlobalFilter: false,
+      cell: ({ getValue, row }) => {
+        const status = row.original._status as RowStatus;
+        if (status === "pending" || status === "processing")
+          return <span className="text-cloudy/40 text-xs">—</span>;
+        const v = getValue() as string;
+        if (!v) return <span className="text-cloudy/40 text-xs">—</span>;
+        const cents = parseFloat(v) * 100;
+        return (
+          <span className="text-cloudy text-xs tabular-nums">
+            {cents < 0.01 ? "<$0.01¢" : `$${(parseFloat(v)).toFixed(4)}`}
+          </span>
+        );
+      },
+    };
+
+    const retryCol: ColumnDef<Record<string, string>> = {
+      id: "_retry", header: "", accessorKey: "_status",
+      size: 200, enableSorting: false, enableGlobalFilter: false,
+      cell: ({ row }) => {
+        const status     = row.original._status as RowStatus;
+        const rIdx       = Number(row.original._rowIndex);
+        const isRetrying = retryingRows.has(rIdx);
+        const naCount    = jobData.requestedFields.filter((key) => {
+          const val = (row.original[key] ?? "").trim().toUpperCase();
+          return val === "NA" || val === "N/A";
+        }).length;
+        const showRetry  = status === "error" || (status === "done" && naCount >= 2);
+        if (!showRetry) return null;
+        return (
+          <div className="flex items-center gap-1.5">
+            <select
+              disabled={isRetrying}
+              value={retryModel[rIdx] ?? MODEL_OPTIONS[0].value}
+              onChange={(e) => setRetryModel((prev) => ({ ...prev, [rIdx]: e.target.value }))}
+              className="text-xs border border-cloudy/30 rounded-md px-1.5 py-1 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-brand-400 disabled:opacity-50"
+            >
+              {MODEL_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            <button
+              disabled={isRetrying}
+              onClick={() => handleRetry(rIdx)}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-white bg-brand-500 hover:bg-brand-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isRetrying ? <Loader2 className="w-3 h-3 animate-spin" /> : "Retry"}
+            </button>
+          </div>
+        );
+      },
+    };
+
+    return [statusCol, ...originalCols, ...enrichedCols, costCol, retryCol];
+  }, [jobData, retryingRows, retryModel, handleRetry]);
 
   const table = useReactTable({
     data: tableData, columns,

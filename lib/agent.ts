@@ -9,6 +9,7 @@ type AgentEnrichParams = {
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
+  model?: string;
 };
 
 const NEWS_KEY_RE = /^recent_news_\d+$/;
@@ -58,9 +59,6 @@ function buildPrompt(params: AgentEnrichParams): string {
   if (params.type === "company") {
     return `You are a company research specialist. Find specific information about a company.
 
-COMPANY IDENTIFIER: ${params.identifier}
-(This is the company's website URL or LinkedIn URL)
-
 FIELDS TO FIND:
 ${fieldsSection}${newsSection}
 
@@ -77,13 +75,13 @@ Use "NA" for any field you cannot find.
 
 {
   ${allKeys}
-}`;
+}
+
+COMPANY IDENTIFIER: ${params.identifier}
+(This is the company's website URL or LinkedIn URL)`;
   }
 
   return `You are a professional researcher specializing in business professionals.
-
-PERSON IDENTIFIER: ${params.identifier}
-(This is the person's LinkedIn profile URL)
 
 FIELDS TO FIND:
 ${fieldsSection}${newsSection}
@@ -101,7 +99,10 @@ Use "NA" for any field you cannot find.
 
 {
   ${allKeys}
-}`;
+}
+
+PERSON IDENTIFIER: ${params.identifier}
+(This is the person's LinkedIn profile URL)`;
 }
 
 function parseAgentOutput(
@@ -162,7 +163,7 @@ function normalizeFields(
 
 export async function enrichWithAgent(
   params: AgentEnrichParams
-): Promise<{ fields: Record<string, string> }> {
+): Promise<{ fields: Record<string, string>; costUsd: number }> {
   const customFieldNames = new Set((params.customFieldDefs ?? []).map((f) => f.name));
 
   const nonProspeoFields = params.requestedFields.filter((f) => {
@@ -173,33 +174,33 @@ export async function enrichWithAgent(
   });
 
   if (nonProspeoFields.length === 0) {
-    return { fields: {} };
+    return { fields: {}, costUsd: 0 };
   }
 
   let rawResult = "";
+  let costUsd = 0;
 
   try {
     for await (const message of query({
       prompt: buildPrompt({ ...params, requestedFields: nonProspeoFields }),
       options: {
+        model: params.model ?? "claude-haiku-4-5-20251001",
         allowedTools: ["WebSearch", "WebFetch"],
-        maxTurns: 10,
+        maxTurns: params.type === "people" ? 15 : 10,
         permissionMode: "acceptEdits",
       },
     })) {
-      if (
-        typeof message === "object" &&
-        message !== null &&
-        "result" in message
-      ) {
-        rawResult = String((message as { result: unknown }).result);
+      if (typeof message === "object" && message !== null && "result" in message) {
+        const msg = message as { result: unknown; total_cost_usd?: number };
+        rawResult = String(msg.result);
+        costUsd = msg.total_cost_usd ?? 0;
       }
     }
   } catch (err) {
     console.error("Agent error:", err);
-    return { fields: Object.fromEntries(nonProspeoFields.map((f) => [f, ""])) };
+    return { fields: Object.fromEntries(nonProspeoFields.map((f) => [f, ""])), costUsd: 0 };
   }
 
   const fields = parseAgentOutput(rawResult, nonProspeoFields);
-  return { fields };
+  return { fields, costUsd };
 }

@@ -6,77 +6,90 @@ import { findWorkEmail } from "@/lib/prospeo";
 import { getFields } from "@/lib/enrichment-fields";
 
 const MAX_ROWS = 200;
+const CONCURRENCY = 15;
 const NEWS_KEY_RE = /^recent_news_\d+$/;
 
 async function processJob(jobId: string): Promise<void> {
-  const job = getJob(jobId);
-  if (!job) return;
+  const jobMaybe = getJob(jobId);
+  if (!jobMaybe) return;
+  const job = jobMaybe; // captured as Job (not Job | undefined) so closures below stay typed
 
   updateJob(jobId, { status: "processing" });
 
-  const validFieldKeys = new Set(getFields(job.type).map((f) => f.key));
+  const validFieldKeys   = new Set(getFields(job.type).map((f) => f.key));
   const customFieldNames = new Set((job.customFieldDefs ?? []).map((f) => f.name));
 
-  for (const row of job.rows) {
-    updateRow(jobId, row.rowIndex, { status: "processing" });
+  let nextIndex = 0;
 
-    const currentStatus = getJob(jobId)?.status;
-    if (currentStatus === "cancelled") return;
+  async function worker() {
+    while (true) {
+      if (getJob(jobId)?.status === "cancelled") return;
 
-    const identifier = row.originalData[job.identifierColumn];
+      const rowIndex = nextIndex++;
+      const row = job.rows[rowIndex];
+      if (!row) return;
 
-    if (!identifier || identifier.trim() === "") {
-      updateRow(jobId, row.rowIndex, {
-        status: "error",
-        error: "Missing identifier value",
-        enrichedData: {},
-      });
-      updateJob(jobId, { processedRows: getJob(jobId)!.processedRows + 1 });
-      continue;
-    }
+      updateRow(jobId, rowIndex, { status: "processing" });
 
-    try {
-      const nonProspeoFields = job.requestedFields.filter(
-        (f) =>
-          (validFieldKeys.has(f) || customFieldNames.has(f) || NEWS_KEY_RE.test(f)) &&
-          f !== "work_email"
-      );
+      const identifier = row.originalData[job.identifierColumn];
 
-      let enrichedData: Record<string, string> = {};
-
-      if (nonProspeoFields.length > 0) {
-        const result = await enrichWithAgent({
-          type: job.type,
-          identifier: identifier.trim(),
-          requestedFields: nonProspeoFields,
-          customFieldDefs: job.customFieldDefs ?? [],
-          newsParams: job.newsParams,
+      if (!identifier || identifier.trim() === "") {
+        updateRow(jobId, rowIndex, {
+          status: "error",
+          error: "Missing identifier value",
+          enrichedData: {},
         });
-        enrichedData = result.fields;
+      } else {
+        try {
+          const nonProspeoFields = job.requestedFields.filter(
+            (f) =>
+              (validFieldKeys.has(f) || customFieldNames.has(f) || NEWS_KEY_RE.test(f)) &&
+              f !== "work_email"
+          );
+
+          let enrichedData: Record<string, string> = {};
+
+          let rowCostUsd = 0;
+
+          if (nonProspeoFields.length > 0) {
+            const result = await enrichWithAgent({
+              type: job.type,
+              identifier: identifier.trim(),
+              requestedFields: nonProspeoFields,
+              customFieldDefs: job.customFieldDefs ?? [],
+              newsParams: job.newsParams,
+            });
+            enrichedData = result.fields;
+            rowCostUsd = result.costUsd;
+          }
+
+          if (job.type === "people" && job.requestedFields.includes("work_email")) {
+            const prospeoResult = await findWorkEmail({ linkedinUrl: identifier.trim() });
+            enrichedData.work_email = prospeoResult.email ?? "";
+          }
+
+          updateRow(jobId, rowIndex, { status: "done", enrichedData, costUsd: rowCostUsd });
+        } catch (err) {
+          updateRow(jobId, rowIndex, {
+            status: "error",
+            error: String(err),
+            enrichedData: {},
+          });
+        }
       }
 
-      if (job.type === "people" && job.requestedFields.includes("work_email")) {
-        const prospeoResult = await findWorkEmail({ linkedinUrl: identifier.trim() });
-        enrichedData.work_email = prospeoResult.email ?? "";
-      }
-
-      updateRow(jobId, row.rowIndex, { status: "done", enrichedData });
-    } catch (err) {
-      updateRow(jobId, row.rowIndex, {
-        status: "error",
-        error: String(err),
-        enrichedData: {},
-      });
+      const processed = getJob(jobId)!.rows.filter(
+        (r) => r.status === "done" || r.status === "error"
+      ).length;
+      updateJob(jobId, { processedRows: processed });
     }
-
-    const currentJob = getJob(jobId)!;
-    const processed = currentJob.rows.filter(
-      (r) => r.status === "done" || r.status === "error"
-    ).length;
-    updateJob(jobId, { processedRows: processed });
   }
 
-  updateJob(jobId, { status: "completed" });
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+
+  if (getJob(jobId)?.status !== "cancelled") {
+    updateJob(jobId, { status: "completed" });
+  }
 }
 
 export async function POST(request: NextRequest) {

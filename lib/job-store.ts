@@ -8,6 +8,7 @@ export type EnrichmentRow = {
   enrichedData: Record<string, string>;
   status: "pending" | "processing" | "done" | "error";
   error?: string;
+  costUsd?: number;
 };
 
 export type Job = {
