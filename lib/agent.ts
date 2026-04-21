@@ -14,6 +14,38 @@ type AgentEnrichParams = {
 };
 
 const NEWS_KEY_RE = /^recent_news_\d+$/;
+const MAX_AGENT_ATTEMPTS = 3;
+const BASE_BACKOFF_MS = 500;
+const MAX_BACKOFF_MS = 8000;
+
+// SDKResultError subtypes we consider transient and worth retrying. Quota /
+// budget / max-turns failures are terminal — retrying burns money to hit the
+// same wall.
+const RETRYABLE_RESULT_SUBTYPES = new Set(["error_during_execution"]);
+
+function backoffDelay(attemptIndex: number): number {
+  const base = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** attemptIndex);
+  const jitter = base * (0.5 + Math.random() * 0.5);
+  return Math.floor(jitter);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 type PromptParts = { systemPrompt: string; userPrompt: string };
 
@@ -181,56 +213,109 @@ export async function enrichWithAgent(
     return { fields: {}, costUsd: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
   }
 
-  let rawResult = "";
-  let costUsd = 0;
-  let cacheReadTokens = 0;
-  let cacheCreationTokens = 0;
-
-  const abortController = new AbortController();
-  if (params.signal) {
-    if (params.signal.aborted) abortController.abort();
-    else params.signal.addEventListener("abort", () => abortController.abort(), { once: true });
-  }
-
   const { systemPrompt, userPrompt } = buildPromptParts({
     ...params,
     requestedFields: nonProspeoFields,
   });
 
-  try {
-    for await (const message of query({
-      prompt: userPrompt,
-      options: {
-        model: params.model ?? "claude-haiku-4-5-20251001",
-        systemPrompt: [systemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY],
-        allowedTools: ["WebSearch", "WebFetch"],
-        maxTurns: params.type === "people" ? 15 : 10,
-        permissionMode: "acceptEdits",
-        abortController,
-      },
-    })) {
-      if (typeof message === "object" && message !== null && "result" in message) {
-        const msg = message as {
-          result: unknown;
-          total_cost_usd?: number;
-          modelUsage?: Record<string, { cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>;
-        };
-        rawResult = String(msg.result);
-        costUsd = msg.total_cost_usd ?? 0;
-        for (const usage of Object.values(msg.modelUsage ?? {})) {
-          cacheReadTokens += usage.cacheReadInputTokens ?? 0;
-          cacheCreationTokens += usage.cacheCreationInputTokens ?? 0;
+  // Cost and cache counters accumulate across attempts — a failed attempt
+  // that never produced a parseable result still bills tokens.
+  let rawResult = "";
+  let costUsd = 0;
+  let cacheReadTokens = 0;
+  let cacheCreationTokens = 0;
+  let lastError: unknown;
+  let lastErrorSubtype: string | undefined;
+
+  for (let attempt = 0; attempt < MAX_AGENT_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      try {
+        await sleep(backoffDelay(attempt - 1), params.signal);
+      } catch {
+        // Aborted during backoff — fall through to the abort handling below.
+        throw lastError ?? new DOMException("Aborted", "AbortError");
+      }
+      console.warn(
+        `enrichWithAgent: retrying (attempt ${attempt + 1}/${MAX_AGENT_ATTEMPTS}) after ${
+          lastErrorSubtype ?? (lastError instanceof Error ? lastError.message : "error")
+        }`
+      );
+    }
+
+    const attemptAbort = new AbortController();
+    if (params.signal) {
+      if (params.signal.aborted) attemptAbort.abort();
+      else params.signal.addEventListener("abort", () => attemptAbort.abort(), { once: true });
+    }
+
+    let attemptRaw = "";
+    let attemptSubtype: string | undefined;
+
+    try {
+      for await (const message of query({
+        prompt: userPrompt,
+        options: {
+          model: params.model ?? "claude-haiku-4-5-20251001",
+          systemPrompt: [systemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY],
+          allowedTools: ["WebSearch", "WebFetch"],
+          maxTurns: params.type === "people" ? 15 : 10,
+          permissionMode: "acceptEdits",
+          abortController: attemptAbort,
+        },
+      })) {
+        if (
+          typeof message === "object" &&
+          message !== null &&
+          (message as { type?: string }).type === "result"
+        ) {
+          const msg = message as {
+            subtype?: string;
+            result?: unknown;
+            total_cost_usd?: number;
+            modelUsage?: Record<string, { cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>;
+          };
+          costUsd += msg.total_cost_usd ?? 0;
+          for (const usage of Object.values(msg.modelUsage ?? {})) {
+            cacheReadTokens += usage.cacheReadInputTokens ?? 0;
+            cacheCreationTokens += usage.cacheCreationInputTokens ?? 0;
+          }
+          if (msg.subtype === "success") {
+            attemptRaw = String(msg.result ?? "");
+          } else if (msg.subtype) {
+            attemptSubtype = msg.subtype;
+          }
         }
       }
+    } catch (err) {
+      if (params.signal?.aborted) throw err;
+      lastError = err;
+      lastErrorSubtype = undefined;
+      continue;
     }
-  } catch (err) {
-    if (params.signal?.aborted) throw err;
-    console.error("Agent error:", err);
+
+    if (attemptRaw) {
+      rawResult = attemptRaw;
+      lastError = undefined;
+      lastErrorSubtype = undefined;
+      break;
+    }
+
+    // No usable result from this attempt.
+    lastError = undefined;
+    lastErrorSubtype = attemptSubtype;
+    if (attemptSubtype && !RETRYABLE_RESULT_SUBTYPES.has(attemptSubtype)) {
+      console.warn(`enrichWithAgent: terminal result subtype "${attemptSubtype}", not retrying`);
+      break;
+    }
+  }
+
+  if (!rawResult) {
+    if (lastError) console.error("Agent error:", lastError);
     return {
       fields: Object.fromEntries(nonProspeoFields.map((f) => [f, ""])),
-      costUsd: 0,
-      cacheReadTokens: 0,
-      cacheCreationTokens: 0,
+      costUsd,
+      cacheReadTokens,
+      cacheCreationTokens,
     };
   }
 
