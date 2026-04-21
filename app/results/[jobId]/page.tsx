@@ -82,25 +82,79 @@ export default function ResultsPage() {
   const [cancelling,   setCancelling]   = useState(false);
   const [retryingRows, setRetryingRows] = useState<Set<number>>(new Set());
   const [retryModel,   setRetryModel]   = useState<Record<number, string>>({});
-  const [pollVersion,  setPollVersion]  = useState(0);
 
   useEffect(() => {
-    let active = true;
-    async function poll() {
+    if (!jobId) return;
+
+    let cancelled = false;
+    let es: EventSource | null = null;
+
+    async function checkExists() {
       try {
-        const res = await fetch(`/api/status/${jobId}`);
-        if (res.status === 404) { setNotFound(true); return; }
-        const data: JobData = await res.json();
-        if (active) setJobData(data);
-        const terminal = data.status === "completed" || data.status === "failed" || data.status === "cancelled";
-        if (!terminal) setTimeout(poll, 2000);
+        const res = await fetch(`/api/status/${jobId}`, { method: "GET" });
+        if (res.status === 404) {
+          if (!cancelled) setNotFound(true);
+          return false;
+        }
       } catch {
-        if (active) setTimeout(poll, 3000);
+        // Network hiccup — let EventSource try anyway.
       }
+      return true;
     }
-    poll();
-    return () => { active = false; };
-  }, [jobId, pollVersion]);
+
+    checkExists().then((ok) => {
+      if (cancelled || !ok) return;
+
+      es = new EventSource(`/api/stream/${jobId}`);
+
+      es.addEventListener("snapshot", (e) => {
+        if (cancelled) return;
+        setJobData(JSON.parse((e as MessageEvent).data) as JobData);
+      });
+
+      es.addEventListener("row", (e) => {
+        if (cancelled) return;
+        const row = JSON.parse((e as MessageEvent).data) as JobRow;
+        setJobData((prev) => {
+          if (!prev) return prev;
+          const rows = prev.rows.map((r) => (r.rowIndex === row.rowIndex ? row : r));
+          const processedRows = rows.filter((r) => r.status === "done" || r.status === "error").length;
+          return {
+            ...prev,
+            rows,
+            processedRows,
+            percentComplete: prev.totalRows > 0 ? Math.round((processedRows / prev.totalRows) * 100) : 0,
+          };
+        });
+      });
+
+      es.addEventListener("job", (e) => {
+        if (cancelled) return;
+        const partial = JSON.parse((e as MessageEvent).data) as Partial<JobData>;
+        setJobData((prev) => (prev ? { ...prev, ...partial } : prev));
+      });
+
+      es.addEventListener("end", () => {
+        es?.close();
+      });
+
+      es.onerror = () => {
+        // EventSource auto-reconnects; if the job is already terminal the
+        // server closed cleanly and we don't need to keep retrying.
+        setJobData((prev) => {
+          if (prev && (prev.status === "completed" || prev.status === "failed" || prev.status === "cancelled")) {
+            es?.close();
+          }
+          return prev;
+        });
+      };
+    });
+
+    return () => {
+      cancelled = true;
+      es?.close();
+    };
+  }, [jobId]);
 
   const handleRetry = useCallback(async (rowIndex: number) => {
     const model = retryModel[rowIndex] ?? MODEL_OPTIONS[0].value;
@@ -111,7 +165,6 @@ export default function ResultsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rowIndex, model }),
       });
-      setPollVersion((v) => v + 1);
     } finally {
       setRetryingRows((prev) => { const s = new Set(prev); s.delete(rowIndex); return s; });
     }
