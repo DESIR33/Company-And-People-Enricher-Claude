@@ -2,9 +2,9 @@
 
 > **This project shows you the power of what AI tools and workflows can do for a business.**
 >
-> You can fork this project and link all the internal tools you use for your GTM (Sales & Marketing) needs. After helping Fortune 100 clients alongside top SaaS companies like [Rocketlane](https://rocketlane.com), [SARAL](https://saral.com), and top agencies like [Teknicks](https://teknicks.com) & [The Kiln](https://thekiln.com) with AI workflows and systems, I've seen firsthand how these systems transform GTM operations — cutting research time from hours to seconds, eliminating manual data entry, and freeing teams to focus on what actually moves the needle: building relationships and closing deals. What used to take a full-time SDR a week can now run overnight, automatically, at a fraction of the cost.
+> You can fork this project and link all the internal tools you use for your GTM (Sales & Marketing) needs. After helping Fortune 100 clients alongside top SaaS companies like Rocketlane, SARAL, and top agencies like Teknicks & The Kiln with AI workflows and systems, I've seen firsthand how these systems transform GTM and other business operations by cutting time from hours to seconds, eliminating manual data entry, and freeing teams to focus on what actually moves the needle: building relationships and closing deals. What used to take a full-time SDR a week can now run overnight, automatically, at a fraction of the cost.
 >
-> Fork this. Adapt it. Connect it to your CRM, outreach tools, and data sources. The compounding effect of even one well-built AI system is hard to overstate.
+> Fork this. Adapt it. Connect it to your CRM, other enrichment tools, outreach tools, and data sources. The compounding effect of even one well-built AI system is hard to overstate.
 
 ---
 
