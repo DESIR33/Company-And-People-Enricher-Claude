@@ -379,6 +379,7 @@ function buildSearchQuery(cfg: DirectoryConfig): string | undefined {
 }
 
 export function startSearch(params: {
+  workspaceId: string;
   mode: DiscoveryMode;
   name: string;
   queryText: string;
@@ -396,6 +397,7 @@ export function startSearch(params: {
   }
 
   const search = createSearch({
+    workspaceId: params.workspaceId,
     mode: params.mode,
     name: params.name,
     queryText: params.queryText,

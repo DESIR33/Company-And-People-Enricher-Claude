@@ -26,6 +26,7 @@ export type EnrichmentRow = {
 
 export type Job = {
   id: string;
+  workspaceId: string;
   type: EnrichmentType;
   status: "pending" | "processing" | "completed" | "failed" | "cancelled";
   createdAt: number;
@@ -73,6 +74,7 @@ type JobRowRow = {
 
 type JobMetaRow = {
   id: string;
+  workspace_id: string;
   type: Job["type"];
   status: Job["status"];
   created_at: number;
@@ -108,6 +110,7 @@ function rowFromDb(r: JobRowRow): EnrichmentRow {
 function jobFromDb(meta: JobMetaRow, rows: JobRowRow[]): Job {
   return {
     id: meta.id,
+    workspaceId: meta.workspace_id,
     type: meta.type,
     status: meta.status,
     createdAt: meta.created_at,
@@ -133,6 +136,7 @@ function jobFromDb(meta: JobMetaRow, rows: JobRowRow[]): Job {
 }
 
 export function createJob(params: {
+  workspaceId: string;
   type: EnrichmentType;
   identifierColumn: string;
   cityColumn?: string;
@@ -152,10 +156,10 @@ export function createJob(params: {
   const customFieldDefs = params.customFieldDefs ?? [];
 
   const insertMeta = db.prepare(`
-    INSERT INTO jobs (id, type, status, created_at, updated_at, identifier_column, city_column,
+    INSERT INTO jobs (id, workspace_id, type, status, created_at, updated_at, identifier_column, city_column,
       requested_fields, custom_field_defs, news_params, outreach_context, score_rubric,
       channel_types, include_owner_personal, suppression_list, total_rows, processed_rows)
-    VALUES (@id, @type, 'pending', @now, @now, @identifierColumn, @cityColumn,
+    VALUES (@id, @workspaceId, @type, 'pending', @now, @now, @identifierColumn, @cityColumn,
       @requestedFields, @customFieldDefs, @newsParams, @outreachContext, @scoreRubric,
       @channelTypes, @includeOwnerPersonal, @suppressionList, @totalRows, 0)
   `);
@@ -167,6 +171,7 @@ export function createJob(params: {
   db.transaction(() => {
     insertMeta.run({
       id,
+      workspaceId: params.workspaceId,
       type: params.type,
       now,
       identifierColumn: params.identifierColumn,
@@ -192,6 +197,51 @@ export function createJob(params: {
   })();
 
   return getJob(id)!;
+}
+
+export type JobSummary = {
+  id: string;
+  workspaceId: string;
+  type: EnrichmentType;
+  status: Job["status"];
+  createdAt: number;
+  updatedAt: number;
+  totalRows: number;
+  processedRows: number;
+};
+
+// Lightweight list for the per-workspace "Job history" page. We deliberately
+// don't load every row payload — the history view only needs counters.
+export function listJobsByWorkspace(workspaceId: string, limit = 100): JobSummary[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT id, workspace_id, type, status, created_at, updated_at, total_rows, processed_rows
+         FROM jobs
+        WHERE workspace_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?`
+    )
+    .all(workspaceId, limit) as Array<{
+    id: string;
+    workspace_id: string;
+    type: EnrichmentType;
+    status: Job["status"];
+    created_at: number;
+    updated_at: number;
+    total_rows: number;
+    processed_rows: number;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    workspaceId: r.workspace_id,
+    type: r.type,
+    status: r.status,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    totalRows: r.total_rows,
+    processedRows: r.processed_rows,
+  }));
 }
 
 export function getJob(id: string): Job | undefined {

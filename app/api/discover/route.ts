@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { listSearches } from "@/lib/discovery-store";
+import { listSearchesByWorkspace } from "@/lib/discovery-store";
 import { startSearch } from "@/lib/discovery-runner";
+import { getActiveWorkspaceId } from "@/lib/workspace-context";
 
 const MAX_RESULTS_LIMIT = 50;
 
@@ -78,7 +79,8 @@ const CreateSearchSchema = z.discriminatedUnion("mode", [
 ]);
 
 export async function GET() {
-  return NextResponse.json({ searches: listSearches() });
+  const workspaceId = await getActiveWorkspaceId();
+  return NextResponse.json({ searches: listSearchesByWorkspace(workspaceId) });
 }
 
 export async function POST(request: NextRequest) {
@@ -101,7 +103,9 @@ export async function POST(request: NextRequest) {
   }
 
   const data = parsed.data;
+  const workspaceId = await getActiveWorkspaceId();
   const result = startSearch({
+    workspaceId,
     mode: data.mode,
     name: data.name,
     queryText: data.queryText,

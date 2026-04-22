@@ -37,6 +37,7 @@ import {
   ChevronDown,
   ChevronUp,
   StopCircle,
+  Share2,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { getFields } from "@/lib/enrichment-fields";
@@ -864,6 +865,7 @@ export default function ResultsPage() {
               <span className="hidden sm:inline">← New enrichment</span>
             </button>
           )}
+          <ShareButton jobId={jobId as string} />
           <a
             href={`/api/download/${jobId}`}
             download
@@ -1046,5 +1048,74 @@ export default function ResultsPage() {
         </table>
       </div>
     </div>
+  );
+}
+
+// Share button for the admin results header. On click, asks the server for
+// the branded /r/<token>/<jobId> URL (derived from the job's workspace) and
+// copies an absolute URL to the clipboard so the operator can paste it into
+// an email / Slack. Intentionally does not surface the raw shareToken in
+// the UI — the user doesn't need to see it.
+function ShareButton({ jobId }: { jobId: string }) {
+  const [state, setState] = useState<"idle" | "loading" | "copied" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  const onClick = useCallback(async () => {
+    setState("loading");
+    setError(null);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/share`);
+      const body = await res.json();
+      if (!res.ok) {
+        setError(body.error ?? "Couldn't generate share link");
+        setState("error");
+        setTimeout(() => setState("idle"), 2000);
+        return;
+      }
+      const absolute = `${window.location.origin}${body.shareUrl}`;
+      try {
+        await navigator.clipboard.writeText(absolute);
+        setState("copied");
+      } catch {
+        // Clipboard blocked — show the URL in a prompt as a graceful fallback.
+        window.prompt("Copy this branded share URL:", absolute);
+        setState("copied");
+      }
+      setTimeout(() => setState("idle"), 1500);
+    } catch {
+      setError("Network error");
+      setState("error");
+      setTimeout(() => setState("idle"), 2000);
+    }
+  }, [jobId]);
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={state === "loading"}
+      title={error ?? "Copy a branded, client-facing URL for these results"}
+      className={clsx(
+        "inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-150 disabled:opacity-50",
+        state === "copied"
+          ? "bg-emerald-500 text-white"
+          : state === "error"
+          ? "bg-red-50 text-red-700 border border-red-200"
+          : "text-gray-600 bg-white border border-cloudy/30 hover:bg-pampas"
+      )}
+    >
+      {state === "loading" ? (
+        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+      ) : state === "copied" ? (
+        <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
+      ) : (
+        <Share2 className="w-3.5 h-3.5" strokeWidth={2} />
+      )}
+      <span className="sm:hidden">
+        {state === "copied" ? "Copied" : state === "error" ? "Error" : "Share"}
+      </span>
+      <span className="hidden sm:inline">
+        {state === "copied" ? "Link copied" : state === "error" ? (error ?? "Error") : "Share branded link"}
+      </span>
+    </button>
   );
 }

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createMonitor, listMonitors } from "@/lib/monitor-store";
+import { createMonitor, listMonitorsByWorkspace } from "@/lib/monitor-store";
 import { computeNextRunAt, isSchedulable } from "@/lib/monitor-scheduler";
 import { startMonitorRun } from "@/lib/monitor-runner";
 import { PEOPLE_FIELDS } from "@/lib/enrichment-fields";
+import { getActiveWorkspaceId } from "@/lib/workspace-context";
 
 const CUSTOM_FIELD_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 _\-/&]{0,99}$/;
 
@@ -73,7 +74,8 @@ const CreateMonitorSchema = z
   );
 
 export async function GET() {
-  return NextResponse.json({ monitors: listMonitors() });
+  const workspaceId = await getActiveWorkspaceId();
+  return NextResponse.json({ monitors: listMonitorsByWorkspace(workspaceId) });
 }
 
 export async function POST(request: NextRequest) {
@@ -112,7 +114,9 @@ export async function POST(request: NextRequest) {
   const shouldSchedule = isSchedulable(data.schedule);
   const nextRunAt = shouldSchedule ? computeNextRunAt(data.schedule) : undefined;
 
+  const workspaceId = await getActiveWorkspaceId();
   const monitor = createMonitor({
+    workspaceId,
     name: data.name,
     mode: data.mode,
     config: data.config,

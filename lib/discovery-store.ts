@@ -42,6 +42,7 @@ export type DiscoveryStatus =
 
 export type DiscoverySearch = {
   id: string;
+  workspaceId: string;
   mode: DiscoveryMode;
   name: string;
   queryText: string;
@@ -79,6 +80,7 @@ export type DiscoveredLead = {
 
 type SearchRow = {
   id: string;
+  workspace_id: string;
   mode: DiscoveryMode;
   name: string;
   query_text: string;
@@ -117,6 +119,7 @@ type LeadRow = {
 function searchFromRow(r: SearchRow): DiscoverySearch {
   return {
     id: r.id,
+    workspaceId: r.workspace_id,
     mode: r.mode,
     name: r.name,
     queryText: r.query_text,
@@ -156,6 +159,7 @@ function leadFromRow(r: LeadRow): DiscoveredLead {
 }
 
 export function createSearch(params: {
+  workspaceId: string;
   mode: DiscoveryMode;
   name: string;
   queryText: string;
@@ -169,12 +173,13 @@ export function createSearch(params: {
   const now = Date.now();
   db.prepare(
     `INSERT INTO discovery_searches (
-      id, mode, name, query_text, seed_companies, directory_config, max_results, status,
+      id, workspace_id, mode, name, query_text, seed_companies, directory_config, max_results, status,
       created_at, updated_at, parent_monitor_id
-    ) VALUES (@id, @mode, @name, @queryText, @seedCompanies, @directoryConfig, @maxResults, 'queued',
+    ) VALUES (@id, @workspaceId, @mode, @name, @queryText, @seedCompanies, @directoryConfig, @maxResults, 'queued',
               @now, @now, @parentMonitorId)`
   ).run({
     id,
+    workspaceId: params.workspaceId,
     mode: params.mode,
     name: params.name,
     queryText: params.queryText,
@@ -189,6 +194,21 @@ export function createSearch(params: {
     now,
   });
   return getSearch(id)!;
+}
+
+export function listSearchesByWorkspace(
+  workspaceId: string,
+  limit = 50
+): DiscoverySearch[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM discovery_searches
+         WHERE workspace_id = ?
+         ORDER BY created_at DESC LIMIT ?`
+    )
+    .all(workspaceId, limit) as SearchRow[];
+  return rows.map(searchFromRow);
 }
 
 export function getSearch(id: string): DiscoverySearch | undefined {

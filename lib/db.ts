@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 
 const DB_PATH = process.env.DATABASE_PATH ?? path.join(process.cwd(), ".data", "jobs.db");
 
@@ -13,6 +14,20 @@ function init(db: Database.Database): void {
   db.pragma("foreign_keys = ON");
   db.pragma("synchronous = NORMAL");
   db.exec(`
+    CREATE TABLE IF NOT EXISTS workspaces (
+      id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      brand_name TEXT,
+      logo_url TEXT,
+      primary_color TEXT,
+      accent_color TEXT,
+      support_email TEXT,
+      footer_text TEXT,
+      share_token TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
@@ -203,6 +218,56 @@ function init(db: Database.Database): void {
   if (!jobColumns.has("suppression_list")) {
     db.exec(`ALTER TABLE jobs ADD COLUMN suppression_list TEXT`);
   }
+
+  // --- Client workspace scoping (white-label) ---
+  // Every tenant-bearing table gets a nullable workspace_id, backfilled to the
+  // "Default" workspace on first boot. FK enforcement is intentionally loose
+  // (no ON DELETE CASCADE) — we don't want deleting a workspace to nuke
+  // in-flight jobs. The workspace UI warns and reassigns instead.
+  const monitorColumns = new Set(
+    (db.prepare(`PRAGMA table_info(monitors)`).all() as { name: string }[]).map((c) => c.name)
+  );
+  const signalColumns = new Set(
+    (db.prepare(`PRAGMA table_info(signal_monitors)`).all() as { name: string }[]).map((c) => c.name)
+  );
+  if (!jobColumns.has("workspace_id")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN workspace_id TEXT`);
+  }
+  if (!monitorColumns.has("workspace_id")) {
+    db.exec(`ALTER TABLE monitors ADD COLUMN workspace_id TEXT`);
+  }
+  if (!signalColumns.has("workspace_id")) {
+    db.exec(`ALTER TABLE signal_monitors ADD COLUMN workspace_id TEXT`);
+  }
+  if (!searchColumns.has("workspace_id")) {
+    db.exec(`ALTER TABLE discovery_searches ADD COLUMN workspace_id TEXT`);
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_jobs_workspace ON jobs(workspace_id, created_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_monitors_workspace ON monitors(workspace_id, created_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_signal_monitors_workspace ON signal_monitors(workspace_id, created_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_discovery_searches_workspace ON discovery_searches(workspace_id, created_at DESC)`);
+
+  // Ensure a default workspace exists and backfill rows that predate
+  // workspace scoping. Idempotent — cheap to run every boot.
+  const defaultRow = db
+    .prepare(`SELECT id FROM workspaces WHERE slug = 'default'`)
+    .get() as { id: string } | undefined;
+  let defaultId: string;
+  if (defaultRow) {
+    defaultId = defaultRow.id;
+  } else {
+    defaultId = crypto.randomUUID();
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, brand_name, share_token, created_at, updated_at)
+       VALUES (?, 'default', 'Default Workspace', 'Enricher', ?, ?, ?)`
+    ).run(defaultId, crypto.randomBytes(18).toString("base64url"), now, now);
+  }
+  db.prepare(`UPDATE jobs              SET workspace_id = ? WHERE workspace_id IS NULL`).run(defaultId);
+  db.prepare(`UPDATE monitors          SET workspace_id = ? WHERE workspace_id IS NULL`).run(defaultId);
+  db.prepare(`UPDATE signal_monitors   SET workspace_id = ? WHERE workspace_id IS NULL`).run(defaultId);
+  db.prepare(`UPDATE discovery_searches SET workspace_id = ? WHERE workspace_id IS NULL`).run(defaultId);
+
   // Jobs that were in flight when the process died can never resume — their
   // workers and abort controllers are gone. Mark them failed so the UI can
   // tell the user instead of leaving them stuck at "processing".

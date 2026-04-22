@@ -15,6 +15,7 @@ export type CustomFieldDef = { name: string; description: string };
 
 export type Monitor = {
   id: string;
+  workspaceId: string;
   name: string;
   mode: MonitorMode;
   config: MonitorConfig;
@@ -92,6 +93,7 @@ export type MonitorLead = {
 
 type MonitorRow = {
   id: string;
+  workspace_id: string;
   name: string;
   mode: MonitorMode;
   config: string;
@@ -150,6 +152,7 @@ type LeadRow = {
 function monitorFromRow(r: MonitorRow): Monitor {
   return {
     id: r.id,
+    workspaceId: r.workspace_id,
     name: r.name,
     mode: r.mode,
     config: JSON.parse(r.config),
@@ -211,6 +214,7 @@ function leadFromRow(r: LeadRow): MonitorLead {
 }
 
 export function createMonitor(params: {
+  workspaceId: string;
   name: string;
   mode: MonitorMode;
   config: MonitorConfig;
@@ -228,16 +232,17 @@ export function createMonitor(params: {
 
   db.prepare(
     `INSERT INTO monitors (
-      id, name, mode, config, schedule, active, webhook_url,
+      id, workspace_id, name, mode, config, schedule, active, webhook_url,
       requested_fields, custom_field_defs, outreach_context, manual_engagers,
       created_at, updated_at, next_run_at
     ) VALUES (
-      @id, @name, @mode, @config, @schedule, 1, @webhookUrl,
+      @id, @workspaceId, @name, @mode, @config, @schedule, 1, @webhookUrl,
       @requestedFields, @customFieldDefs, @outreachContext, @manualEngagers,
       @now, @now, @nextRunAt
     )`
   ).run({
     id,
+    workspaceId: params.workspaceId,
     name: params.name,
     mode: params.mode,
     config: JSON.stringify(params.config),
@@ -252,6 +257,17 @@ export function createMonitor(params: {
   });
 
   return getMonitor(id)!;
+}
+
+// List monitors for a single workspace. Used by the /monitors page so each
+// tenant only sees their own monitors. The unscoped listMonitors() is kept
+// only for internal schedulers that iterate across all workspaces.
+export function listMonitorsByWorkspace(workspaceId: string): Monitor[] {
+  const db = getDb();
+  const rows = db
+    .prepare(`SELECT * FROM monitors WHERE workspace_id = ? ORDER BY created_at DESC`)
+    .all(workspaceId) as MonitorRow[];
+  return rows.map(monitorFromRow);
 }
 
 export function listMonitors(): Monitor[] {

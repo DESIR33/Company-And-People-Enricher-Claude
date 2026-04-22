@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
-import { LayoutGrid, Gauge, Building2, Users, UserSearch, Radar, Target, Flame, Search, Zap } from "lucide-react";
+import { Gauge, Building2, Users, UserSearch, Radar, Target, Flame, Search, Zap } from "lucide-react";
+import { WorkspaceSwitcher } from "./workspace-switcher";
 
 const LINKS = [
   { href: "/discover",              label: "Discover",       icon: Search },
@@ -19,13 +20,17 @@ const LINKS = [
 
 export function MonitorNav() {
   const pathname = usePathname();
+  // The branded public results view (/r/<token>/<jobId>) has its own header
+  // and deliberately hides every app-side affordance — workspace switcher,
+  // in-app nav, etc. Early-return so those chromes don't leak into the
+  // client-facing surface.
+  if (pathname.startsWith("/r/")) return null;
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-4 sm:pt-6">
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-4 sm:pt-6 flex items-start gap-2 sm:gap-3">
       {/* The nav has 9 items and always overflows on narrow screens. Scroll it
           horizontally on mobile rather than trying to wrap — wrapping would
-          eat vertical real estate above every page. Keep the active item
-          visible by snapping to it. */}
-      <div className="overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0 scrollbar-thin">
+          eat vertical real estate above every page. */}
+      <div className="flex-1 min-w-0 overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0 scrollbar-thin">
         <div className="inline-flex items-center gap-1 sm:gap-2 bg-white/60 backdrop-blur-sm border border-cloudy/30 rounded-xl p-1 w-max">
           {LINKS.map(({ href, label, icon: Icon }) => {
             const active =
@@ -51,10 +56,12 @@ export function MonitorNav() {
               </Link>
             );
           })}
-          <span className="hidden sm:inline-flex items-center gap-1 px-2 py-1.5 text-[10px] text-cloudy">
-            <LayoutGrid className="w-3 h-3" />
-          </span>
         </div>
+      </div>
+      {/* Workspace switcher sits to the right of the nav. Pinned on a fixed
+          column so horizontal scroll of the nav rail doesn't hide it. */}
+      <div className="flex-shrink-0">
+        <WorkspaceSwitcher />
       </div>
     </div>
   );

@@ -1,9 +1,11 @@
 "use client";
 
 import { MeshGradient } from "@paper-design/shaders-react";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 export function MeshBackground() {
+  const pathname = usePathname();
   const [dimensions, setDimensions] = useState({ width: 1920, height: 1080 });
   const [mounted, setMounted] = useState(false);
 
@@ -27,6 +29,9 @@ export function MeshBackground() {
   }, []);
 
   if (!mounted) return null;
+  // Branded client-facing routes get a plain background — the mesh is an
+  // app-side design touch that would undermine white-labeling.
+  if (pathname.startsWith("/r/")) return null;
 
   return (
     <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
