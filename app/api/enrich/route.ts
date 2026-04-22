@@ -18,6 +18,7 @@ import {
   MULTI_CHANNEL_REQUIRED_FIELDS,
 } from "@/lib/enrichment-fields";
 import { CHANNEL_TYPES } from "@/lib/channels/types";
+import { getActiveWorkspaceId } from "@/lib/workspace-context";
 
 const MAX_ROWS = 200;
 const MAX_ROWS_LEAD_SCORE = 500;
@@ -278,7 +279,9 @@ export async function POST(request: NextRequest) {
       ];
     }
 
+    const workspaceId = await getActiveWorkspaceId();
     const job = createJob({
+      workspaceId,
       type,
       identifierColumn,
       cityColumn,

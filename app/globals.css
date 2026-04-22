@@ -18,19 +18,55 @@
 }
 
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-font-smoothing: antialiased; }
+html {
+  -webkit-font-smoothing: antialiased;
+  /* iOS Safari respects the viewport-fit=cover declared in the Next Viewport
+     export only if we also reserve space for safe-area insets. */
+  -webkit-text-size-adjust: 100%;
+}
 
 body {
   background: transparent;
   color: #1a1a18;
   font-family: var(--font-dm-sans), system-ui, sans-serif;
+  /* Prevent accidental horizontal scroll on mobile from any one offending
+     child — lets us catch regressions visually without breaking the page. */
+  overflow-x: hidden;
 }
 
 h1, h2, h3 {
   font-family: var(--font-lora), Georgia, serif;
 }
 
+/* Prevent iOS from zooming in when an input is focused. Triggers at <16px,
+   so bump the minimum size on mobile-only. */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
 .tabular { font-variant-numeric: tabular-nums; }
+
+/* Thin, unobtrusive scrollbar for horizontally-scrolling rails (nav + tables
+   that need to escape narrow viewports). WebKit + Firefox in one rule. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(177, 173, 161, 0.4) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(177, 173, 161, 0.4);
+  border-radius: 9999px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

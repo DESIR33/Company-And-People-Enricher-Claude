@@ -326,12 +326,12 @@ export default function EnrichPage() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-10 space-y-6">
+    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6 sm:py-10 space-y-5 sm:space-y-6">
 
       {/* Animated heading */}
       <div className="space-y-2 py-2">
-        <div className="flex items-baseline gap-3 overflow-hidden">
-          <span className="text-3xl font-serif font-bold text-gray-900 tracking-tight">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 overflow-hidden">
+          <span className="text-2xl sm:text-3xl font-serif font-bold text-gray-900 tracking-tight">
             {isLeadScore ? "Score" : isBuyingTrigger ? "Spot" : isMultiChannel ? "Reach" : "Enrich"}
           </span>
           <TextRotate
@@ -342,7 +342,7 @@ export default function EnrichPage() {
             splitBy="characters"
             staggerDuration={0.03}
             staggerFrom="first"
-            mainClassName="text-3xl font-serif font-bold tracking-tight text-brand-500 overflow-hidden"
+            mainClassName="text-2xl sm:text-3xl font-serif font-bold tracking-tight text-brand-500 overflow-hidden"
             elementLevelClassName="overflow-hidden"
           />
         </div>
@@ -353,34 +353,36 @@ export default function EnrichPage() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-cloudy/20 p-1 rounded-xl w-fit">
-        {TABS.map(({ type: t, label, icon: Icon }) => {
-          const active = t === type;
-          return (
-            <button
-              key={t}
-              onClick={() => switchTab(t)}
-              className={clsx(
-                "inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-150",
-                active
-                  ? "bg-white text-gray-900 shadow-sm"
-                  : "text-gray-500 hover:text-gray-700"
-              )}
-            >
-              <Icon className={clsx("w-4 h-4", active ? "text-brand-500" : "text-cloudy")} strokeWidth={2} />
-              {label}
-            </button>
-          );
-        })}
+      {/* Tabs — 6 tabs overflow phones; scroll horizontally rather than wrap. */}
+      <div className="-mx-4 sm:mx-0 px-4 sm:px-0 overflow-x-auto scrollbar-thin">
+        <div className="inline-flex gap-1 bg-cloudy/20 p-1 rounded-xl w-max">
+          {TABS.map(({ type: t, label, icon: Icon }) => {
+            const active = t === type;
+            return (
+              <button
+                key={t}
+                onClick={() => switchTab(t)}
+                className={clsx(
+                  "inline-flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-all duration-150 whitespace-nowrap",
+                  active
+                    ? "bg-white text-gray-900 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                <Icon className={clsx("w-4 h-4 flex-shrink-0", active ? "text-brand-500" : "text-cloudy")} strokeWidth={2} />
+                {label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Upload card */}
       <div className="bg-white rounded-xl border border-cloudy/30 overflow-hidden">
-        <div className="px-6 py-4 border-b border-cloudy/20">
+        <div className="px-5 sm:px-6 py-4 border-b border-cloudy/20">
           <h2 className="text-sm font-semibold text-gray-700">Upload your CSV</h2>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-6 space-y-4">
           <div
             {...getRootProps()}
             className={clsx(
@@ -471,13 +473,13 @@ export default function EnrichPage() {
       {/* Lead score rubric card */}
       {isLeadScore && (
         <div className="bg-white rounded-xl border border-cloudy/30 overflow-hidden">
-          <div className="px-6 py-4 border-b border-cloudy/20">
+          <div className="px-5 sm:px-6 py-4 border-b border-cloudy/20">
             <h2 className="text-sm font-semibold text-gray-700">Scoring rubric</h2>
             <p className="text-xs text-cloudy mt-1">
               Define what a great lead looks like. The agent applies this rubric to every row and returns ICP Fit, Pain Signal, and Reachability scores with an explanation — then sorts them so you can work the top 50.
             </p>
           </div>
-          <div className="p-6 space-y-5">
+          <div className="p-4 sm:p-6 space-y-5">
             <div className="space-y-1.5">
               <div className="flex items-baseline justify-between">
                 <label htmlFor="icp-criteria" className="text-sm font-medium text-gray-800">
@@ -576,13 +578,13 @@ export default function EnrichPage() {
       {/* Multi-channel config card */}
       {isMultiChannel && (
         <div className="bg-white rounded-xl border border-cloudy/30 overflow-hidden">
-          <div className="px-6 py-4 border-b border-cloudy/20">
+          <div className="px-5 sm:px-6 py-4 border-b border-cloudy/20">
             <h2 className="text-sm font-semibold text-gray-700">Contact channels to discover</h2>
             <p className="text-xs text-cloudy mt-1">
               Local business owners respond on their phone, not work@. Pick which channels the agent should hunt for — every channel it finds comes back with a reachability score, compliance label, and a channel-appropriate first-line opener, ranked best-first.
             </p>
           </div>
-          <div className="p-6 space-y-5">
+          <div className="p-4 sm:p-6 space-y-5">
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {CHANNEL_TYPES.map((c) => {
                 const checked = selectedChannelTypes.includes(c);
@@ -695,7 +697,7 @@ export default function EnrichPage() {
             {allStandardSelected ? "Deselect all" : "Select all"}
           </button>
         </div>
-        <div className="p-6 space-y-5">
+        <div className="p-4 sm:p-6 space-y-5">
           {isLeadScore && (
             <div className="rounded-lg border border-brand-200 bg-brand-50/60 px-3 py-2.5">
               <p className="text-xs font-medium text-gray-800">
@@ -911,7 +913,7 @@ export default function EnrichPage() {
 
       {/* Outreach context — shown when first-line is selected, or always for buying_trigger / multi_channel (outreach is forced) */}
       {(selectedFields.includes("first_line") || isBuyingTrigger || isMultiChannel) && (
-        <div className="bg-white border border-cloudy/20 rounded-xl p-5 space-y-2">
+        <div className="bg-white border border-cloudy/20 rounded-xl p-4 sm:p-5 space-y-2">
           <div className="flex items-baseline justify-between">
             <label htmlFor="outreach-context" className="text-sm font-semibold text-gray-900">
               Outreach context <span className="text-cloudy font-normal">(optional)</span>
@@ -941,7 +943,7 @@ export default function EnrichPage() {
       )}
 
       {/* Submit */}
-      <div className="flex items-center gap-4 pb-8">
+      <div className="flex flex-wrap items-center gap-3 sm:gap-4 pb-8">
         <StarButton
           onClick={handleSubmit}
           disabled={

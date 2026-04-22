@@ -118,12 +118,12 @@ export default function SignalsPage() {
 
   return (
     <div className="min-h-screen pb-16">
-      <div className="max-w-5xl mx-auto px-6 pt-6 space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-4 sm:pt-6 space-y-4 sm:space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Zap className="w-5 h-5 text-brand-500" strokeWidth={2} />
-              <h1 className="text-3xl font-serif font-bold text-gray-900 tracking-tight">
+              <Zap className="w-5 h-5 text-brand-500 flex-shrink-0" strokeWidth={2} />
+              <h1 className="text-2xl sm:text-3xl font-serif font-bold text-gray-900 tracking-tight">
                 Signal Monitors
               </h1>
             </div>
@@ -133,7 +133,7 @@ export default function SignalsPage() {
           </div>
           <button
             onClick={() => setCreating((v) => !v)}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 text-white text-sm font-medium hover:bg-brand-600 transition-colors"
+            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-brand-500 text-white text-sm font-medium hover:bg-brand-600 transition-colors self-start sm:self-auto flex-shrink-0"
           >
             <Plus className="w-4 h-4" />
             {creating ? "Cancel" : "New signal monitor"}
@@ -264,54 +264,56 @@ function MonitorCard({
 
   return (
     <div className="bg-white border border-cloudy/30 rounded-xl overflow-hidden hover:border-brand-200 transition-colors">
-      <div className="p-5 flex items-start gap-4">
-        <div
-          className={clsx(
-            "w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 bg-pampas/60",
-            meta.accent
-          )}
-        >
-          <Icon className="w-5 h-5" strokeWidth={2} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className="text-sm font-semibold text-gray-900 hover:text-brand-500 transition-colors truncate"
-            >
-              {monitor.name}
-            </button>
-            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 uppercase tracking-wide">
-              {meta.label}
-            </span>
-            <span
-              className={clsx(
-                "text-[10px] font-medium px-1.5 py-0.5 rounded-full uppercase tracking-wide",
-                monitor.active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+      <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
+        <div className="flex items-start gap-3 sm:gap-4 min-w-0 flex-1">
+          <div
+            className={clsx(
+              "w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 bg-pampas/60",
+              meta.accent
+            )}
+          >
+            <Icon className="w-5 h-5" strokeWidth={2} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => setExpanded((v) => !v)}
+                className="text-sm font-semibold text-gray-900 hover:text-brand-500 transition-colors truncate text-left"
+              >
+                {monitor.name}
+              </button>
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 uppercase tracking-wide">
+                {meta.label}
+              </span>
+              <span
+                className={clsx(
+                  "text-[10px] font-medium px-1.5 py-0.5 rounded-full uppercase tracking-wide",
+                  monitor.active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                )}
+              >
+                {monitor.active ? "Active" : "Paused"}
+              </span>
+            </div>
+            <p className="text-xs text-cloudy mt-1 truncate">
+              {renderConfigSummary(monitor)}
+            </p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-[11px] text-cloudy tabular">
+              <span className="inline-flex items-center gap-1">
+                <Clock className="w-3 h-3" /> {SCHEDULE_LABEL[monitor.schedule]} · {monitor.timeframe}
+              </span>
+              <span>Runs: <span className="text-gray-700 font-medium">{monitor.runCount}</span></span>
+              <span>Leads: <span className="text-gray-700 font-medium">{monitor.leadCountTotal}</span></span>
+              <span>Cost: <span className="text-gray-700 font-medium">${monitor.costUsdTotal.toFixed(3)}</span></span>
+              {monitor.lastRunAt && (
+                <span>Last run: {formatAgo(monitor.lastRunAt)}</span>
               )}
-            >
-              {monitor.active ? "Active" : "Paused"}
-            </span>
-          </div>
-          <p className="text-xs text-cloudy mt-1 truncate">
-            {renderConfigSummary(monitor)}
-          </p>
-          <div className="flex items-center gap-4 mt-2 text-[11px] text-cloudy tabular flex-wrap">
-            <span className="inline-flex items-center gap-1">
-              <Clock className="w-3 h-3" /> {SCHEDULE_LABEL[monitor.schedule]} · {monitor.timeframe}
-            </span>
-            <span>Runs: <span className="text-gray-700 font-medium">{monitor.runCount}</span></span>
-            <span>Leads: <span className="text-gray-700 font-medium">{monitor.leadCountTotal}</span></span>
-            <span>Cost: <span className="text-gray-700 font-medium">${monitor.costUsdTotal.toFixed(3)}</span></span>
-            {monitor.lastRunAt && (
-              <span>Last run: {formatAgo(monitor.lastRunAt)}</span>
-            )}
-            {monitor.nextRunAt && monitor.active && (
-              <span>Next: {formatAgo(monitor.nextRunAt, true)}</span>
-            )}
+              {monitor.nextRunAt && monitor.active && (
+                <span>Next: {formatAgo(monitor.nextRunAt, true)}</span>
+              )}
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap sm:self-start">
           <button
             onClick={toggle}
             disabled={busy !== null}
@@ -351,11 +353,11 @@ function MonitorCard({
       {expanded && (
         <div className="border-t border-cloudy/20 bg-pampas/30">
           {runs === null ? (
-            <div className="px-5 py-3 text-xs text-cloudy flex items-center gap-2">
+            <div className="px-4 sm:px-5 py-3 text-xs text-cloudy flex items-center gap-2">
               <Loader2 className="w-3 h-3 animate-spin" /> Loading runs…
             </div>
           ) : runs.length === 0 ? (
-            <div className="px-5 py-3 text-xs text-cloudy">
+            <div className="px-4 sm:px-5 py-3 text-xs text-cloudy">
               No runs yet. Hit &ldquo;Run now&rdquo; to produce the first batch.
             </div>
           ) : (
@@ -364,17 +366,20 @@ function MonitorCard({
                 <Link
                   key={r.id}
                   href={`/discover?search=${r.id}`}
-                  className="flex items-center gap-3 px-5 py-2 text-xs hover:bg-white/60 transition-colors"
+                  className="flex items-center gap-2 sm:gap-3 px-4 sm:px-5 py-2 text-xs hover:bg-white/60 transition-colors"
                 >
                   <RunStatusDot status={r.status} />
                   <span className="flex-1 truncate text-gray-700">{r.name}</span>
-                  <span className="text-cloudy tabular">
+                  <span className="text-cloudy tabular hidden sm:inline">
                     {r.discoveredCount} lead(s)
                   </span>
-                  <span className="text-cloudy tabular w-16 text-right">
+                  <span className="text-cloudy tabular sm:hidden">
+                    {r.discoveredCount}
+                  </span>
+                  <span className="text-cloudy tabular sm:w-16 sm:text-right">
                     ${r.costUsd.toFixed(3)}
                   </span>
-                  <span className="text-cloudy tabular">{formatAgo(r.createdAt)}</span>
+                  <span className="text-cloudy tabular hidden sm:inline">{formatAgo(r.createdAt)}</span>
                   <ChevronRight className="w-3 h-3 text-cloudy" />
                 </Link>
               ))}
@@ -557,10 +562,10 @@ function CreateForm({
 
   return (
     <div className="bg-white border border-cloudy/30 rounded-xl overflow-hidden">
-      <div className="px-5 py-4 border-b border-cloudy/20">
+      <div className="px-4 sm:px-5 py-4 border-b border-cloudy/20">
         <h2 className="text-sm font-semibold text-gray-700">New signal monitor</h2>
       </div>
-      <div className="p-5 space-y-4">
+      <div className="p-4 sm:p-5 space-y-4">
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">Name</label>
           <input

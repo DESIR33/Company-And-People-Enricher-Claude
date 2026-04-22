@@ -104,9 +104,17 @@ export async function POST(request: NextRequest, ctx: RouteContext) {
   const identifierColumn = chooseIdentifier(leads);
 
   const origin = new URL(request.url).origin;
+  // Forward the active-workspace cookie so the internal /api/enrich call
+  // lands the new job under the SAME workspace the discovery search belongs
+  // to. Without this, cross-route internal fetches lose cookies and the job
+  // would fall back to the default workspace.
+  const cookieHeader = request.headers.get("cookie") ?? "";
   const enrichRes = await fetch(`${origin}/api/enrich`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+    },
     body: JSON.stringify({
       type: "company",
       csvContent,

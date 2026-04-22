@@ -214,7 +214,7 @@ export default function MonitorDetailPage() {
 
   return (
     <div className="min-h-screen pb-16">
-      <div className="max-w-5xl mx-auto px-6 pt-6 space-y-6">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-4 sm:pt-6 space-y-4 sm:space-y-6">
         <div className="flex items-center gap-3">
           <Link
             href="/monitors"
@@ -225,7 +225,7 @@ export default function MonitorDetailPage() {
           </Link>
         </div>
 
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
           <div className="flex items-start gap-3 min-w-0">
             <div
               className={clsx(
@@ -236,13 +236,13 @@ export default function MonitorDetailPage() {
               <ModeIcon className="w-5 h-5" strokeWidth={2} />
             </div>
             <div className="min-w-0">
-              <h1 className="text-2xl font-serif font-bold text-gray-900 truncate">
+              <h1 className="text-xl sm:text-2xl font-serif font-bold text-gray-900 break-words">
                 {monitor.name}
               </h1>
               <p className="text-xs text-cloudy mt-0.5">{describeMonitor(monitor)}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap sm:flex-shrink-0">
             <button
               onClick={toggle}
               disabled={busy}
@@ -264,7 +264,8 @@ export default function MonitorDetailPage() {
               className="text-xs px-3 py-2 rounded-md border border-cloudy/40 text-gray-600 hover:bg-pampas inline-flex items-center gap-1.5 transition-colors"
             >
               <Download className="w-3.5 h-3.5" />
-              Export CSV
+              <span className="sm:hidden">CSV</span>
+              <span className="hidden sm:inline">Export CSV</span>
             </a>
             <button
               onClick={remove}
@@ -419,7 +420,7 @@ function RunRow({
         </span>
         <span className="text-gray-700">{new Date(run.createdAt).toLocaleString()}</span>
         <span className="text-cloudy">trigger: {run.trigger}</span>
-        <span className="ml-auto tabular text-cloudy">
+        <span className="sm:ml-auto tabular text-cloudy text-[11px]">
           <span className="text-gray-700 font-medium">{run.newCount}</span> new ·{" "}
           <span className="text-gray-700 font-medium">{run.enrichedCount}</span> enriched ·{" "}
           <span className="text-gray-700 font-medium">{run.dedupCount}</span> dedup · ${run.costUsd.toFixed(4)}

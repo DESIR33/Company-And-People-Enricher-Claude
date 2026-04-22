@@ -1,24 +1,40 @@
 "use client";
 
 import { MeshGradient } from "@paper-design/shaders-react";
+import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 export function MeshBackground() {
+  const pathname = usePathname();
   const [dimensions, setDimensions] = useState({ width: 1920, height: 1080 });
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
-    const update = () => setDimensions({ width: window.innerWidth, height: window.innerHeight });
+    // Use documentElement so we pick up the layout viewport, not the visual
+    // viewport — otherwise iOS Safari shrinks the shader when the URL bar
+    // hides/shows and the user sees a seam at the bottom of the screen.
+    const update = () =>
+      setDimensions({
+        width: document.documentElement.clientWidth || window.innerWidth,
+        height: document.documentElement.clientHeight || window.innerHeight,
+      });
     update();
     window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
+    window.addEventListener("orientationchange", update);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("orientationchange", update);
+    };
   }, []);
 
   if (!mounted) return null;
+  // Branded client-facing routes get a plain background — the mesh is an
+  // app-side design touch that would undermine white-labeling.
+  if (pathname.startsWith("/r/")) return null;
 
   return (
-    <div className="fixed inset-0 -z-10 w-screen h-screen">
+    <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
       <MeshGradient
         width={dimensions.width}
         height={dimensions.height}

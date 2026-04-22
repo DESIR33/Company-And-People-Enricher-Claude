@@ -146,6 +146,7 @@ export function startSignalMonitorRun(params: {
   }
 
   const search = createSearch({
+    workspaceId: monitor.workspaceId,
     mode: MODE_BY_SIGNAL[monitor.signalType],
     name: `${monitor.name} — ${new Date().toISOString().slice(0, 10)}`,
     queryText: buildQueryText(monitor),

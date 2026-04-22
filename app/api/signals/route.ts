@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import {
   createSignalMonitor,
-  listSignalMonitors,
+  listSignalMonitorsByWorkspace,
   type SignalType,
 } from "@/lib/signal-store";
 import { startSignalMonitorRun } from "@/lib/signal-runner";
 import { computeNextRunAt, isSchedulable } from "@/lib/monitor-scheduler";
+import { getActiveWorkspaceId } from "@/lib/workspace-context";
 
 const SCHEDULE_ENUM = z.enum(["manual", "once", "daily", "weekly", "monthly"]);
 
@@ -60,7 +61,8 @@ const CreateSignalSchema = z.discriminatedUnion("signalType", [
 ]);
 
 export async function GET() {
-  return NextResponse.json({ monitors: listSignalMonitors() });
+  const workspaceId = await getActiveWorkspaceId();
+  return NextResponse.json({ monitors: listSignalMonitorsByWorkspace(workspaceId) });
 }
 
 export async function POST(request: NextRequest) {
@@ -120,7 +122,9 @@ export async function POST(request: NextRequest) {
     };
   }
 
+  const workspaceId = await getActiveWorkspaceId();
   const monitor = createSignalMonitor({
+    workspaceId,
     name: data.name,
     signalType,
     config,

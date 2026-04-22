@@ -25,6 +25,7 @@ export type SignalConfig = {
 
 export type SignalMonitor = {
   id: string;
+  workspaceId: string;
   name: string;
   signalType: SignalType;
   config: SignalConfig;
@@ -43,6 +44,7 @@ export type SignalMonitor = {
 
 type Row = {
   id: string;
+  workspace_id: string;
   name: string;
   signal_type: SignalType;
   config: string;
@@ -62,6 +64,7 @@ type Row = {
 function fromRow(r: Row): SignalMonitor {
   return {
     id: r.id,
+    workspaceId: r.workspace_id,
     name: r.name,
     signalType: r.signal_type,
     config: JSON.parse(r.config),
@@ -80,6 +83,7 @@ function fromRow(r: Row): SignalMonitor {
 }
 
 export function createSignalMonitor(params: {
+  workspaceId: string;
   name: string;
   signalType: SignalType;
   config: SignalConfig;
@@ -93,14 +97,15 @@ export function createSignalMonitor(params: {
   const now = Date.now();
   db.prepare(
     `INSERT INTO signal_monitors (
-      id, name, signal_type, config, schedule, active, max_results, timeframe,
+      id, workspace_id, name, signal_type, config, schedule, active, max_results, timeframe,
       created_at, updated_at, next_run_at
     ) VALUES (
-      @id, @name, @signalType, @config, @schedule, 1, @maxResults, @timeframe,
+      @id, @workspaceId, @name, @signalType, @config, @schedule, 1, @maxResults, @timeframe,
       @now, @now, @nextRunAt
     )`
   ).run({
     id,
+    workspaceId: params.workspaceId,
     name: params.name,
     signalType: params.signalType,
     config: JSON.stringify(params.config),
@@ -111,6 +116,18 @@ export function createSignalMonitor(params: {
     now,
   });
   return getSignalMonitor(id)!;
+}
+
+// Scoped variant for per-tenant UIs. The unscoped listSignalMonitors() stays
+// for the cron scheduler, which needs to see every active monitor.
+export function listSignalMonitorsByWorkspace(workspaceId: string): SignalMonitor[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM signal_monitors WHERE workspace_id = ? ORDER BY created_at DESC`
+    )
+    .all(workspaceId) as Row[];
+  return rows.map(fromRow);
 }
 
 export function getSignalMonitor(id: string): SignalMonitor | undefined {
