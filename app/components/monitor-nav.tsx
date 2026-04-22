@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
-import { LayoutGrid, Gauge, Building2, Users, UserSearch, Radar, Target, Flame } from "lucide-react";
+import { LayoutGrid, Gauge, Building2, Users, UserSearch, Radar, Target, Flame, Search } from "lucide-react";
 
 const LINKS = [
+  { href: "/discover",              label: "Discover",       icon: Search },
   { href: "/enrich/company",        label: "Company",        icon: Building2 },
   { href: "/enrich/people",         label: "People",         icon: Users },
   { href: "/enrich/decision_maker", label: "Decision Maker", icon: UserSearch },

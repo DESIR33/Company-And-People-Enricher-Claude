@@ -108,6 +108,42 @@ function init(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_monitor_runs_monitor ON monitor_runs(monitor_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_monitor_leads_monitor ON monitor_leads(monitor_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_monitor_leads_run     ON monitor_leads(run_id);
+    CREATE TABLE IF NOT EXISTS discovery_searches (
+      id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL,
+      name TEXT NOT NULL,
+      query_text TEXT NOT NULL,
+      seed_companies TEXT,
+      max_results INTEGER NOT NULL DEFAULT 25,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      started_at INTEGER,
+      completed_at INTEGER,
+      discovered_count INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL NOT NULL DEFAULT 0,
+      discovery_log TEXT,
+      agent_note TEXT,
+      error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS discovered_leads (
+      id TEXT PRIMARY KEY,
+      search_id TEXT NOT NULL,
+      company_name TEXT NOT NULL,
+      website_url TEXT,
+      linkedin_url TEXT,
+      description TEXT,
+      location TEXT,
+      industry TEXT,
+      employee_range TEXT,
+      match_reason TEXT,
+      source_url TEXT,
+      score INTEGER,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (search_id) REFERENCES discovery_searches(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_discovered_leads_search
+      ON discovered_leads(search_id, created_at ASC);
   `);
   // Backfill new columns on pre-existing databases.
   const jobColumns = new Set(
@@ -141,6 +177,10 @@ function init(db: Database.Database): void {
   ).run(now);
   db.prepare(
     `UPDATE monitor_runs SET status = 'failed', error = 'Interrupted by server restart', updated_at = ?
+     WHERE status IN ('queued', 'running')`
+  ).run(now);
+  db.prepare(
+    `UPDATE discovery_searches SET status = 'failed', error = 'Interrupted by server restart', updated_at = ?
      WHERE status IN ('queued', 'running')`
   ).run(now);
 }
