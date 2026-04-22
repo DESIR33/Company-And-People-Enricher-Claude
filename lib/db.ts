@@ -28,6 +28,24 @@ function init(db: Database.Database): void {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS workspace_business_profiles (
+      workspace_id TEXT PRIMARY KEY,
+      business_name TEXT NOT NULL DEFAULT '',
+      offerings TEXT NOT NULL DEFAULT '[]',
+      service_geographies TEXT NOT NULL DEFAULT '[]',
+      target_industries TEXT NOT NULL DEFAULT '[]',
+      persona_titles TEXT NOT NULL DEFAULT '[]',
+      company_size_min INTEGER,
+      company_size_max INTEGER,
+      deal_size_min REAL,
+      deal_size_max REAL,
+      excluded_segments TEXT NOT NULL DEFAULT '[]',
+      messaging_tone TEXT,
+      compliance_boundaries TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
@@ -267,6 +285,33 @@ function init(db: Database.Database): void {
   db.prepare(`UPDATE monitors          SET workspace_id = ? WHERE workspace_id IS NULL`).run(defaultId);
   db.prepare(`UPDATE signal_monitors   SET workspace_id = ? WHERE workspace_id IS NULL`).run(defaultId);
   db.prepare(`UPDATE discovery_searches SET workspace_id = ? WHERE workspace_id IS NULL`).run(defaultId);
+  const backfillNow = Date.now();
+  db.prepare(
+    `INSERT INTO workspace_business_profiles (
+      workspace_id, business_name, offerings, service_geographies, target_industries,
+      persona_titles, company_size_min, company_size_max, deal_size_min, deal_size_max,
+      excluded_segments, messaging_tone, compliance_boundaries, created_at, updated_at
+    )
+    SELECT
+      w.id,
+      '',
+      '[]',
+      '[]',
+      '[]',
+      '[]',
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      '[]',
+      NULL,
+      '{}',
+      ?,
+      ?
+    FROM workspaces w
+    LEFT JOIN workspace_business_profiles p ON p.workspace_id = w.id
+    WHERE p.workspace_id IS NULL`
+  ).run(backfillNow, backfillNow);
 
   // Jobs that were in flight when the process died can never resume — their
   // workers and abort controllers are gone. Mark them failed so the UI can

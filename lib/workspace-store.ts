@@ -98,10 +98,19 @@ export function getDefaultWorkspace(): Workspace {
     const db = getDb();
     const id = crypto.randomUUID();
     const now = Date.now();
-    db.prepare(
-      `INSERT INTO workspaces (id, slug, name, brand_name, share_token, created_at, updated_at)
-       VALUES (?, 'default', 'Default Workspace', 'Enricher', ?, ?, ?)`
-    ).run(id, crypto.randomBytes(18).toString("base64url"), now, now);
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO workspaces (id, slug, name, brand_name, share_token, created_at, updated_at)
+         VALUES (?, 'default', 'Default Workspace', 'Enricher', ?, ?, ?)`
+      ).run(id, crypto.randomBytes(18).toString("base64url"), now, now);
+      db.prepare(
+        `INSERT INTO workspace_business_profiles (
+          workspace_id, business_name, offerings, service_geographies, target_industries,
+          persona_titles, company_size_min, company_size_max, deal_size_min, deal_size_max,
+          excluded_segments, messaging_tone, compliance_boundaries, created_at, updated_at
+        ) VALUES (?, '', '[]', '[]', '[]', '[]', NULL, NULL, NULL, NULL, '[]', NULL, '{}', ?, ?)`
+      ).run(id, now, now);
+    })();
     return getWorkspace(id)!;
   }
   return ws;
@@ -120,27 +129,36 @@ export function createWorkspace(params: {
   const db = getDb();
   const id = crypto.randomUUID();
   const now = Date.now();
-  db.prepare(
-    `INSERT INTO workspaces (
-      id, slug, name, brand_name, logo_url, primary_color, accent_color,
-      support_email, footer_text, share_token, created_at, updated_at
-    ) VALUES (
-      @id, @slug, @name, @brandName, @logoUrl, @primaryColor, @accentColor,
-      @supportEmail, @footerText, @shareToken, @now, @now
-    )`
-  ).run({
-    id,
-    slug: params.slug,
-    name: params.name,
-    brandName: params.brandName ?? null,
-    logoUrl: params.logoUrl ?? null,
-    primaryColor: params.primaryColor ?? null,
-    accentColor: params.accentColor ?? null,
-    supportEmail: params.supportEmail ?? null,
-    footerText: params.footerText ?? null,
-    shareToken: crypto.randomBytes(18).toString("base64url"),
-    now,
-  });
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO workspaces (
+        id, slug, name, brand_name, logo_url, primary_color, accent_color,
+        support_email, footer_text, share_token, created_at, updated_at
+      ) VALUES (
+        @id, @slug, @name, @brandName, @logoUrl, @primaryColor, @accentColor,
+        @supportEmail, @footerText, @shareToken, @now, @now
+      )`
+    ).run({
+      id,
+      slug: params.slug,
+      name: params.name,
+      brandName: params.brandName ?? null,
+      logoUrl: params.logoUrl ?? null,
+      primaryColor: params.primaryColor ?? null,
+      accentColor: params.accentColor ?? null,
+      supportEmail: params.supportEmail ?? null,
+      footerText: params.footerText ?? null,
+      shareToken: crypto.randomBytes(18).toString("base64url"),
+      now,
+    });
+    db.prepare(
+      `INSERT INTO workspace_business_profiles (
+        workspace_id, business_name, offerings, service_geographies, target_industries,
+        persona_titles, company_size_min, company_size_max, deal_size_min, deal_size_max,
+        excluded_segments, messaging_tone, compliance_boundaries, created_at, updated_at
+      ) VALUES (?, '', '[]', '[]', '[]', '[]', NULL, NULL, NULL, NULL, '[]', NULL, '{}', ?, ?)`
+    ).run(id, now, now);
+  })();
   return getWorkspace(id)!;
 }
 
