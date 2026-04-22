@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, Users, UserSearch, Sparkles, Radar, Gauge, Target, Flame } from "lucide-react";
+import { Building2, Users, UserSearch, Sparkles, Radar, Gauge, Target, Flame, Search, Zap } from "lucide-react";
 import { clsx } from "clsx";
 
 const NAV = [
+  { href: "/discover",               label: "Discover",        icon: Search,     description: "Find leads from scratch" },
+  { href: "/signals",                label: "Signals",         icon: Zap,        description: "Scheduled buying-intent monitors" },
   { href: "/enrich/company",         label: "Companies",       icon: Building2,  description: "Enrich by URL" },
   { href: "/enrich/people",          label: "People",          icon: Users,      description: "Enrich by LinkedIn" },
   { href: "/enrich/decision_maker",  label: "Decision Makers", icon: UserSearch, description: "Find by business name" },

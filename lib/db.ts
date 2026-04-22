@@ -108,7 +108,79 @@ function init(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_monitor_runs_monitor ON monitor_runs(monitor_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_monitor_leads_monitor ON monitor_leads(monitor_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_monitor_leads_run     ON monitor_leads(run_id);
+    CREATE TABLE IF NOT EXISTS discovery_searches (
+      id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL,
+      name TEXT NOT NULL,
+      query_text TEXT NOT NULL,
+      seed_companies TEXT,
+      directory_config TEXT,
+      max_results INTEGER NOT NULL DEFAULT 25,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      started_at INTEGER,
+      completed_at INTEGER,
+      discovered_count INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL NOT NULL DEFAULT 0,
+      discovery_log TEXT,
+      agent_note TEXT,
+      error TEXT,
+      parent_monitor_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS discovered_leads (
+      id TEXT PRIMARY KEY,
+      search_id TEXT NOT NULL,
+      company_name TEXT NOT NULL,
+      website_url TEXT,
+      linkedin_url TEXT,
+      description TEXT,
+      location TEXT,
+      industry TEXT,
+      employee_range TEXT,
+      match_reason TEXT,
+      source_url TEXT,
+      score INTEGER,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (search_id) REFERENCES discovery_searches(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_discovered_leads_search
+      ON discovered_leads(search_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_discovery_searches_parent
+      ON discovery_searches(parent_monitor_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS signal_monitors (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      signal_type TEXT NOT NULL,
+      config TEXT NOT NULL,
+      schedule TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      max_results INTEGER NOT NULL DEFAULT 25,
+      timeframe TEXT NOT NULL DEFAULT 'last 14 days',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_run_at INTEGER,
+      next_run_at INTEGER,
+      run_count INTEGER NOT NULL DEFAULT 0,
+      lead_count_total INTEGER NOT NULL DEFAULT 0,
+      cost_usd_total REAL NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_signal_monitors_due
+      ON signal_monitors(active, next_run_at);
   `);
+  // parent_monitor_id is nullable and inline on discovery_searches for fresh
+  // installs; existing dev DBs from Phase 1 need the column backfilled.
+  const searchColumns = new Set(
+    (db.prepare(`PRAGMA table_info(discovery_searches)`).all() as { name: string }[]).map(
+      (c) => c.name
+    )
+  );
+  if (!searchColumns.has("parent_monitor_id")) {
+    db.exec(`ALTER TABLE discovery_searches ADD COLUMN parent_monitor_id TEXT`);
+  }
+  if (!searchColumns.has("directory_config")) {
+    db.exec(`ALTER TABLE discovery_searches ADD COLUMN directory_config TEXT`);
+  }
   // Backfill new columns on pre-existing databases.
   const jobColumns = new Set(
     (db.prepare(`PRAGMA table_info(jobs)`).all() as { name: string }[]).map((c) => c.name)
@@ -141,6 +213,10 @@ function init(db: Database.Database): void {
   ).run(now);
   db.prepare(
     `UPDATE monitor_runs SET status = 'failed', error = 'Interrupted by server restart', updated_at = ?
+     WHERE status IN ('queued', 'running')`
+  ).run(now);
+  db.prepare(
+    `UPDATE discovery_searches SET status = 'failed', error = 'Interrupted by server restart', updated_at = ?
      WHERE status IN ('queued', 'running')`
   ).run(now);
 }
