@@ -7,6 +7,7 @@ import { rescoreChannels } from "./channels/scoring";
 import { rankChannels } from "./channels/ranker";
 import { applySuppression, buildSuppressionIndex } from "./channels/suppression";
 import type { Channel } from "./channels/types";
+import { tryStructuredExtract } from "./structured-extract";
 
 const NEWS_KEY_RE = /^recent_news_\d+$/;
 
@@ -227,23 +228,41 @@ export async function enrichRow(
     let cacheCreationTokens = 0;
 
     if (nonProspeoFields.length > 0) {
-      const result = await enrichWithAgent({
+      // Deterministic structured-extract fast path: when every requested
+      // field is covered by Firecrawl's /v1/extract schema and the identifier
+      // is a fetchable URL, skip the agent entirely. Cheaper, faster, and no
+      // LLM drift. `tryStructuredExtract` returns null when any precondition
+      // fails, and we fall through to the agent.
+      const structured = await tryStructuredExtract({
         type: job.type,
         identifier,
         requestedFields: nonProspeoFields,
-        customFieldDefs: job.customFieldDefs ?? [],
-        newsParams: job.newsParams,
-        outreachContext: job.outreachContext,
-        scoreRubric: job.scoreRubric,
-        channelTypes: job.channelTypes,
-        includeOwnerPersonal: job.includeOwnerPersonal,
-        model: opts.model,
+        hasCustomFields: (job.customFieldDefs ?? []).length > 0,
         signal: opts.signal,
       });
-      enrichedData = result.fields;
-      rowCostUsd = result.costUsd;
-      cacheReadTokens = result.cacheReadTokens;
-      cacheCreationTokens = result.cacheCreationTokens;
+
+      if (structured) {
+        enrichedData = structured.fields;
+        rowCostUsd = structured.costUsd;
+      } else {
+        const result = await enrichWithAgent({
+          type: job.type,
+          identifier,
+          requestedFields: nonProspeoFields,
+          customFieldDefs: job.customFieldDefs ?? [],
+          newsParams: job.newsParams,
+          outreachContext: job.outreachContext,
+          scoreRubric: job.scoreRubric,
+          channelTypes: job.channelTypes,
+          includeOwnerPersonal: job.includeOwnerPersonal,
+          model: opts.model,
+          signal: opts.signal,
+        });
+        enrichedData = result.fields;
+        rowCostUsd = result.costUsd;
+        cacheReadTokens = result.cacheReadTokens;
+        cacheCreationTokens = result.cacheCreationTokens;
+      }
     }
 
     if (job.type === "lead_score" && job.scoreRubric) {

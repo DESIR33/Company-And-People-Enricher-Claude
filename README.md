@@ -171,7 +171,34 @@ avoids surprise bills from an overeager keyword monitor.
 
 **Monthly caps.** `/usage` shows this-month lead count and Claude spend against
 `MONITOR_MONTHLY_LEAD_CAP` and `MONITOR_MONTHLY_COST_CAP`. Runs are blocked
-once either cap is reached.
+once either cap is reached. When `FIRECRAWL_API_KEY` is set, Firecrawl credit
+spend (scrape / search / map / extract) is converted to USD via
+`FIRECRAWL_CREDIT_USD` (default `$0.001`/credit) and rolled into the same
+`costUsd` totals — the cost cap governs Claude + Firecrawl together.
+
+---
+
+## Structured Extraction & Directory Mapping (Firecrawl)
+
+When `FIRECRAWL_API_KEY` is set, the enricher takes two shortcuts that skip
+agent work where an agent isn't needed — cheaper and more deterministic:
+
+- **Structured extract (`/v1/extract`).** "Company" enrichment jobs whose
+  requested fields are all single-URL-extractable (industry, description,
+  HQ, phone, Instagram, Facebook, Google Business URL, Google rating,
+  review count, service area, service categories, years in business,
+  LinkedIn URL) are routed to Firecrawl's `/v1/extract` endpoint with a
+  JSON schema. No Claude agent loop, no web search — 5 Firecrawl credits
+  per URL. Falls back to the agent automatically for LinkedIn identifiers,
+  fields that need cross-site reasoning (funding, news, tech stack,
+  first line, any scoring), or when extract times out.
+- **Directory enumeration (`/v1/map`).** The directory discovery flow
+  (Chamber of Commerce roots, association member lists, YC batches, PH
+  topic pages, GitHub topics, custom URLs) now calls `/v1/map` after the
+  initial scrape to enumerate profile URLs under the root — 1 credit per
+  call, up to 5,000 URLs. Those URLs are fed into the agent's pre-fetched
+  context as a concrete pool to walk, instead of the agent hunting for
+  profile pages.
 
 ---
 
