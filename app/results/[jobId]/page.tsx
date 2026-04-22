@@ -31,11 +31,17 @@ import {
   Mail,
   Megaphone,
   MessageSquare,
+  Copy,
+  Check,
+  ExternalLink,
+  ChevronDown,
+  ChevronUp,
   StopCircle,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { getFields } from "@/lib/enrichment-fields";
 import { CHANNEL_TYPE_LABEL, type Channel, type ChannelType } from "@/lib/channels/types";
+import { buildDeepLink } from "@/lib/channels/deeplink";
 
 type RowStatus = "pending" | "processing" | "done" | "error";
 
@@ -146,47 +152,163 @@ function safeParseChannels(raw: string): Channel[] {
   }
 }
 
+// Small reusable button that copies a string to the clipboard and flashes a
+// check mark for 1.2s so the user knows it worked. Falls back silently if
+// clipboard API is unavailable (e.g. insecure context).
+function CopyButton({ text, label, title }: { text: string; label: string; title: string }) {
+  const [copied, setCopied] = useState(false);
+  const onClick = useCallback(async () => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // Clipboard blocked — do nothing; user can still select and copy manually.
+    }
+  }, [text]);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        void onClick();
+      }}
+      title={title}
+      className={clsx(
+        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors",
+        copied
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-pampas text-cloudy hover:bg-white hover:text-gray-900 border border-cloudy/30"
+      )}
+    >
+      {copied ? <Check className="w-3 h-3" strokeWidth={2.5} /> : <Copy className="w-3 h-3" strokeWidth={2} />}
+      <span>{copied ? "Copied" : label}</span>
+    </button>
+  );
+}
+
+function ChannelRow({ c, expanded }: { c: Channel; expanded: boolean }) {
+  const Icon = CHANNEL_ICON[c.type] ?? MessageCircle;
+  const deepLink = buildDeepLink(c);
+  return (
+    <div className="flex flex-col gap-1 border-b border-cloudy/10 last:border-b-0 py-1">
+      <div className="flex items-center gap-2 min-w-0">
+        <Icon className="w-3.5 h-3.5 text-cloudy flex-shrink-0" strokeWidth={2} />
+        <span
+          className="text-[11px] text-gray-900 font-medium truncate flex-1 min-w-0"
+          title={`${CHANNEL_TYPE_LABEL[c.type]}${c.rank_rationale ? ` — ${c.rank_rationale}` : ""}`}
+        >
+          {c.value}
+          {c.scope === "owner_personal" && (
+            <span className="ml-1 text-[10px] text-cloudy italic">owner</span>
+          )}
+        </span>
+        <span className={clsx(
+          "inline-flex items-center justify-center min-w-7 px-1 py-0.5 rounded text-[10px] font-semibold tabular-nums flex-shrink-0",
+          scoreChipClasses(c.reachability_score)
+        )}>
+          {c.reachability_score}
+        </span>
+        <span
+          className={clsx(
+            "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0",
+            complianceChipClasses(c.compliance_label)
+          )}
+          title={c.compliance_note}
+        >
+          {complianceShortLabel(c.compliance_label)}
+        </span>
+      </div>
+      {expanded && (
+        <>
+          <div className="flex flex-wrap items-center gap-1 pl-5">
+            {c.value && (
+              <CopyButton text={c.value} label="Copy value" title={`Copy ${c.value}`} />
+            )}
+            {c.first_line && c.first_line !== "NA" && (
+              <CopyButton
+                text={c.first_line}
+                label="Copy first line"
+                title="Copy the channel-appropriate opener"
+              />
+            )}
+            {deepLink.href && (
+              <a
+                href={deepLink.href}
+                target={deepLink.href.startsWith("http") ? "_blank" : undefined}
+                rel={deepLink.href.startsWith("http") ? "noopener noreferrer" : undefined}
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-brand-500 text-white hover:bg-brand-600 transition-colors"
+                title={deepLink.href}
+              >
+                <ExternalLink className="w-3 h-3" strokeWidth={2} />
+                {deepLink.label}
+              </a>
+            )}
+          </div>
+          {c.first_line && c.first_line !== "NA" && (
+            <p
+              className="pl-5 text-[11px] text-gray-700 italic leading-relaxed"
+              title={c.rank_rationale}
+            >
+              “{c.first_line}”
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function ChannelsCell({ raw }: { raw: string }) {
   const channels = safeParseChannels(raw);
+  const [expanded, setExpanded] = useState(false);
   if (channels.length === 0) {
     return <span className="text-cloudy/40 text-xs">—</span>;
   }
-  const top = channels.slice(0, 3);
-  const extra = channels.length - top.length;
+  const COLLAPSED_N = 3;
+  const visible = expanded ? channels : channels.slice(0, COLLAPSED_N);
+  const extra = channels.length - COLLAPSED_N;
   return (
-    <div className="flex flex-col gap-1 max-w-[22rem]">
-      {top.map((c) => {
-        const Icon = CHANNEL_ICON[c.type] ?? MessageCircle;
-        return (
-          <div
-            key={`${c.type}::${c.scope}`}
-            className="flex items-center gap-2 min-w-0"
-            title={c.rank_rationale || c.compliance_note}
-          >
-            <Icon className="w-3.5 h-3.5 text-cloudy flex-shrink-0" strokeWidth={2} />
-            <span className="text-[11px] text-gray-900 font-medium truncate flex-1 min-w-0" title={c.value}>
-              {c.value}
-              {c.scope === "owner_personal" && (
-                <span className="ml-1 text-[10px] text-cloudy italic">owner</span>
-              )}
-            </span>
-            <span className={clsx(
-              "inline-flex items-center justify-center min-w-7 px-1 py-0.5 rounded text-[10px] font-semibold tabular-nums flex-shrink-0",
-              scoreChipClasses(c.reachability_score)
-            )}>
-              {c.reachability_score}
-            </span>
-            <span className={clsx(
-              "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0",
-              complianceChipClasses(c.compliance_label)
-            )}>
-              {complianceShortLabel(c.compliance_label)}
-            </span>
-          </div>
-        );
-      })}
-      {extra > 0 && (
-        <span className="text-[10px] text-cloudy italic">+ {extra} more</span>
+    <div className="flex flex-col gap-0.5 max-w-[26rem]">
+      {visible.map((c) => (
+        <ChannelRow key={`${c.type}::${c.scope}`} c={c} expanded={expanded} />
+      ))}
+      {(channels.length > COLLAPSED_N || extra > 0) && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+          className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-cloudy hover:text-brand-500 transition-colors self-start"
+        >
+          {expanded ? (
+            <>
+              <ChevronUp className="w-3 h-3" strokeWidth={2.5} />
+              Collapse
+            </>
+          ) : (
+            <>
+              <ChevronDown className="w-3 h-3" strokeWidth={2.5} />
+              Show all + actions ({channels.length})
+            </>
+          )}
+        </button>
+      )}
+      {!expanded && extra <= 0 && channels.length > 0 && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded(true);
+          }}
+          className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-cloudy hover:text-brand-500 transition-colors self-start"
+        >
+          <ChevronDown className="w-3 h-3" strokeWidth={2.5} />
+          Show actions
+        </button>
       )}
     </div>
   );
