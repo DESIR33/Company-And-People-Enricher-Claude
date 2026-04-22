@@ -9,7 +9,13 @@ import {
   LEAD_SCORE_REQUIRED_FIELDS,
   BUYING_TRIGGER_REQUIRED_FIELDS,
   BUYING_TRIGGER_SIGNAL_FIELDS,
+  MULTI_CHANNEL_REQUIRED_FIELDS,
 } from "@/lib/enrichment-fields";
+import {
+  CHANNEL_TYPES,
+  CHANNEL_TYPE_LABEL,
+  type ChannelType,
+} from "@/lib/channels/types";
 import {
   Upload,
   FileSpreadsheet,
@@ -19,6 +25,7 @@ import {
   UserSearch,
   Target,
   Flame,
+  MessageCircle,
   Plus,
   X,
 } from "lucide-react";
@@ -36,9 +43,16 @@ const TABS = [
   { type: "decision_maker"  as const, label: "Decision Maker",  icon: UserSearch },
   { type: "lead_score"      as const, label: "Lead Score",      icon: Target },
   { type: "buying_trigger"  as const, label: "Buying Triggers", icon: Flame },
+  { type: "multi_channel"   as const, label: "Multi-Channel",   icon: MessageCircle },
 ];
 
-type EnrichType = "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
+type EnrichType =
+  | "company"
+  | "people"
+  | "decision_maker"
+  | "lead_score"
+  | "buying_trigger"
+  | "multi_channel";
 
 const TIMEFRAME_OPTIONS = [
   { value: "last 30 days",   label: "Last 30 days" },
@@ -57,6 +71,7 @@ export default function EnrichPage() {
   const isDM           = type === "decision_maker";
   const isLeadScore    = type === "lead_score";
   const isBuyingTrigger = type === "buying_trigger";
+  const isMultiChannel = type === "multi_channel";
   const maxRows        = isLeadScore ? MAX_ROWS_LEAD_SCORE : MAX_ROWS;
 
   const [csvContent,       setCsvContent]       = useState("");
@@ -76,6 +91,10 @@ export default function EnrichPage() {
 
   // Outreach first-line context
   const [outreachContext, setOutreachContext] = useState("");
+
+  // Multi-channel config (only used for multi_channel type)
+  const [selectedChannelTypes, setSelectedChannelTypes] = useState<ChannelType[]>([...CHANNEL_TYPES]);
+  const [includeOwnerPersonal, setIncludeOwnerPersonal] = useState(true);
 
   // Lead score rubric (only used for lead_score type)
   const [icpCriteria,   setIcpCriteria]   = useState("");
@@ -106,6 +125,8 @@ export default function EnrichPage() {
     setNewsCount(3);
     setNewsTimeframe("last 3 months");
     setOutreachContext("");
+    setSelectedChannelTypes([...CHANNEL_TYPES]);
+    setIncludeOwnerPersonal(true);
     setIcpCriteria("");
     setPainSignals("");
     setReachability("");
@@ -165,7 +186,8 @@ export default function EnrichPage() {
     (f) =>
       !f.isParameterized &&
       !(isLeadScore && LEAD_SCORE_REQUIRED_FIELDS.includes(f.key)) &&
-      !(isBuyingTrigger && BUYING_TRIGGER_REQUIRED_FIELDS.includes(f.key))
+      !(isBuyingTrigger && BUYING_TRIGGER_REQUIRED_FIELDS.includes(f.key)) &&
+      !(isMultiChannel && MULTI_CHANNEL_REQUIRED_FIELDS.includes(f.key))
   );
   const allStandardSelected = selectableFields.every((f) => selectedFields.includes(f.key));
   const toggleAll = () =>
@@ -210,12 +232,16 @@ export default function EnrichPage() {
         ? 0
         : BUYING_TRIGGER_SIGNAL_FIELDS.filter((f) => !selectedFields.includes(f)).length)
     : 0;
+  const multiChannelForcedFieldCount = isMultiChannel
+    ? MULTI_CHANNEL_REQUIRED_FIELDS.filter((f) => !selectedFields.includes(f)).length
+    : 0;
   const totalFieldCount =
     selectedFields.length +
     customFields.length +
     newsFieldCount +
     leadScoreForcedFieldCount +
-    buyingTriggerForcedFieldCount;
+    buyingTriggerForcedFieldCount +
+    multiChannelForcedFieldCount;
 
   const weightsSum = weightIcp + weightPain + weightReach;
   const weightsValid = weightsSum === 100;
@@ -223,12 +249,16 @@ export default function EnrichPage() {
   const handleSubmit = async () => {
     if (!csvContent)       return setError("No CSV loaded — drop a file above to get started.");
     if (!identifierColumn) return setError("Pick the column that contains the identifier.");
-    if (!isLeadScore && !isBuyingTrigger && !selectedFields.length && !customFields.length && !newsSelected)
+    if (!isLeadScore && !isBuyingTrigger && !isMultiChannel && !selectedFields.length && !customFields.length && !newsSelected)
       return setError("Select at least one field to enrich.");
 
     if (isLeadScore) {
       if (!icpCriteria.trim()) return setError("Define your ICP criteria before scoring — that's the anchor for the whole rubric.");
       if (!weightsValid)       return setError(`Weights must sum to 100 (currently ${weightsSum}).`);
+    }
+
+    if (isMultiChannel && selectedChannelTypes.length === 0) {
+      return setError("Pick at least one contact channel to discover.");
     }
 
     // Expand recent_news into individual keys
@@ -262,6 +292,8 @@ export default function EnrichPage() {
                 weights: { icp: weightIcp, pain: weightPain, reach: weightReach },
               }
             : undefined,
+          channelTypes: isMultiChannel ? selectedChannelTypes : undefined,
+          includeOwnerPersonal: isMultiChannel ? includeOwnerPersonal : undefined,
         }),
       });
       const data = await res.json();
@@ -288,11 +320,11 @@ export default function EnrichPage() {
       <div className="space-y-2 py-2">
         <div className="flex items-baseline gap-3 overflow-hidden">
           <span className="text-3xl font-serif font-bold text-gray-900 tracking-tight">
-            {isLeadScore ? "Score" : isBuyingTrigger ? "Spot" : "Enrich"}
+            {isLeadScore ? "Score" : isBuyingTrigger ? "Spot" : isMultiChannel ? "Reach" : "Enrich"}
           </span>
           <TextRotate
-            texts={["Company", "People", "Decision Maker", "Lead Score", "Buying Triggers"]}
-            initialIndex={isCompany ? 0 : isDM ? 2 : isLeadScore ? 3 : isBuyingTrigger ? 4 : 1}
+            texts={["Company", "People", "Decision Maker", "Lead Score", "Buying Triggers", "Multi-Channel"]}
+            initialIndex={isCompany ? 0 : isDM ? 2 : isLeadScore ? 3 : isBuyingTrigger ? 4 : isMultiChannel ? 5 : 1}
             auto={false}
             animatePresenceInitial={true}
             splitBy="characters"
@@ -378,11 +410,11 @@ export default function EnrichPage() {
               <label className="block text-xs font-medium text-gray-600 mb-1.5">
                 {isCompany || isLeadScore || isBuyingTrigger
                   ? "Which column contains the company URL?"
-                  : isDM
+                  : isDM || isMultiChannel
                   ? "Which column contains the business name?"
                   : "Which column contains the LinkedIn profile URL?"}
               </label>
-              {isDM && (
+              {(isDM || isMultiChannel) && (
                 <p className="text-[11px] text-cloudy mt-1 mb-1.5">
                   Tip: include the city in the same column (e.g. <span className="font-medium">Joe&apos;s Pizza, Austin TX</span>) so the agent can disambiguate common names.
                 </p>
@@ -506,6 +538,89 @@ export default function EnrichPage() {
         </div>
       )}
 
+      {/* Multi-channel config card */}
+      {isMultiChannel && (
+        <div className="bg-white rounded-xl border border-cloudy/30 overflow-hidden">
+          <div className="px-6 py-4 border-b border-cloudy/20">
+            <h2 className="text-sm font-semibold text-gray-700">Contact channels to discover</h2>
+            <p className="text-xs text-cloudy mt-1">
+              Local business owners respond on their phone, not work@. Pick which channels the agent should hunt for — every channel it finds comes back with a reachability score, compliance label, and a channel-appropriate first-line opener, ranked best-first.
+            </p>
+          </div>
+          <div className="p-6 space-y-5">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {CHANNEL_TYPES.map((c) => {
+                const checked = selectedChannelTypes.includes(c);
+                return (
+                  <label
+                    key={c}
+                    className={clsx(
+                      "flex items-center gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-all duration-100 select-none",
+                      checked ? "bg-brand-50 border-brand-200" : "border-cloudy/30 hover:border-cloudy/50 hover:bg-pampas"
+                    )}
+                  >
+                    <div className={clsx(
+                      "w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all duration-100",
+                      checked ? "bg-brand-500 border-brand-500" : "border-cloudy bg-white"
+                    )}>
+                      {checked && (
+                        <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 10 10" fill="none">
+                          <path d="M1.5 5l2.5 2.5L8.5 2" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
+                    </div>
+                    <span className="text-sm text-gray-800">{CHANNEL_TYPE_LABEL[c]}</span>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() =>
+                        setSelectedChannelTypes((prev) =>
+                          prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]
+                        )
+                      }
+                      className="sr-only"
+                      aria-label={CHANNEL_TYPE_LABEL[c]}
+                    />
+                  </label>
+                );
+              })}
+            </div>
+
+            <label className="flex items-start gap-3 p-3 rounded-lg border border-cloudy/30 cursor-pointer select-none hover:bg-pampas transition-colors">
+              <div className={clsx(
+                "mt-0.5 w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-all duration-100",
+                includeOwnerPersonal ? "bg-brand-500 border-brand-500" : "border-cloudy bg-white"
+              )}>
+                {includeOwnerPersonal && (
+                  <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 10 10" fill="none">
+                    <path d="M1.5 5l2.5 2.5L8.5 2" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className="text-sm font-medium text-gray-800">Also discover owner-personal channels</span>
+                <p className="text-xs text-cloudy mt-0.5 leading-relaxed">
+                  The owner&apos;s personal IG / TikTok / mobile often out-responds the business account 5×. Only surfaces personal channels the agent can tie to this business with concrete evidence.
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                checked={includeOwnerPersonal}
+                onChange={() => setIncludeOwnerPersonal((v) => !v)}
+                className="sr-only"
+                aria-label="Include owner-personal channels"
+              />
+            </label>
+
+            <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2.5">
+              <p className="text-[11px] text-amber-800 leading-relaxed">
+                <strong>Compliance note:</strong> The agent labels every channel (ok / manual-only / requires-consent / restricted / do-not-use) but does NOT enforce. You are responsible for TCPA (SMS), Meta ToS (IG/FB/WhatsApp DMs), GDPR/CASL, and any applicable DNC lists before sending. Google Business Profile messaging was removed on 2024-07-31 and is not a reachable channel.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Fields card */}
       <div className="bg-white rounded-xl border border-cloudy/30 overflow-hidden">
         <div className="px-6 py-4 border-b border-cloudy/20 flex items-center justify-between">
@@ -514,6 +629,8 @@ export default function EnrichPage() {
               ? "Optional extra fields"
               : isBuyingTrigger
               ? "Which buying triggers should we hunt for?"
+              : isMultiChannel
+              ? "Optional extra fields"
               : "Choose fields to enrich"}
           </h2>
           <button
@@ -544,9 +661,20 @@ export default function EnrichPage() {
               </p>
             </div>
           )}
+          {isMultiChannel && (
+            <div className="rounded-lg border border-brand-200 bg-brand-50/60 px-3 py-2.5">
+              <p className="text-xs font-medium text-gray-800">
+                Ranked channels + owner ID are always included:
+              </p>
+              <p className="text-[11px] text-cloudy mt-1 leading-relaxed">
+                Resolved Business Name, Owner Name + Confidence, and a ranked <code>channels</code> array (with per-channel reachability score, compliance label, status, and first-line opener). Pick extra business / owner fields below if you want them alongside the channels.
+              </p>
+            </div>
+          )}
           {fieldGroups
             .filter((group) => !(isLeadScore && group.label === "Lead Score"))
             .filter((group) => !(isBuyingTrigger && (group.label === "Heat Score" || group.label === "Outreach")))
+            .filter((group) => !(isMultiChannel && group.label === "Contact Channels"))
             .map((group) => (
             <div key={group.label}>
               <p className="text-[11px] font-semibold text-cloudy uppercase tracking-wider mb-2">{group.label}</p>
@@ -726,8 +854,8 @@ export default function EnrichPage() {
         </div>
       </div>
 
-      {/* Outreach context — shown when first-line is selected, or always for buying_trigger (outreach fields are forced) */}
-      {(selectedFields.includes("first_line") || isBuyingTrigger) && (
+      {/* Outreach context — shown when first-line is selected, or always for buying_trigger / multi_channel (outreach is forced) */}
+      {(selectedFields.includes("first_line") || isBuyingTrigger || isMultiChannel) && (
         <div className="bg-white border border-cloudy/20 rounded-xl p-5 space-y-2">
           <div className="flex items-baseline justify-between">
             <label htmlFor="outreach-context" className="text-sm font-semibold text-gray-900">
@@ -764,7 +892,8 @@ export default function EnrichPage() {
           disabled={
             !csvContent ||
             isSubmitting ||
-            (isLeadScore && (!icpCriteria.trim() || !weightsValid))
+            (isLeadScore && (!icpCriteria.trim() || !weightsValid)) ||
+            (isMultiChannel && selectedChannelTypes.length === 0)
           }
           loading={isSubmitting}
           label={
@@ -778,6 +907,10 @@ export default function EnrichPage() {
               ? totalFieldCount > 0
                 ? `Find triggers & generate openers · ${totalFieldCount} field${totalFieldCount !== 1 ? "s" : ""}`
                 : "Find triggers & generate openers"
+              : isMultiChannel
+              ? selectedChannelTypes.length > 0
+                ? `Find channels · ${selectedChannelTypes.length} channel${selectedChannelTypes.length !== 1 ? "s" : ""}`
+                : "Find channels"
               : totalFieldCount > 0
               ? `Start enrichment · ${totalFieldCount} field${totalFieldCount !== 1 ? "s" : ""}`
               : "Start enrichment"

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getJob } from "@/lib/job-store";
 import { mergeEnrichedRows, serializeCSV } from "@/lib/csv";
+import {
+  DEFAULT_MAX_FLATTENED_CHANNELS,
+  flattenChannels,
+  flattenedChannelHeaders,
+} from "@/lib/channels/flatten";
+import { parseChannels } from "@/lib/channels/schema";
 
 export async function GET(
   _request: NextRequest,
@@ -36,6 +42,25 @@ export async function GET(
     finalHeaders = ["Rank", ...headers];
   }
 
+  // For multi_channel jobs, replace the opaque "channels" JSON column with a
+  // flat ranked column set (channel_1_type, channel_1_value, …) so CSV users
+  // can sort / filter without touching JSON. The raw structured payload is
+  // preserved in channels_json for advanced consumers.
+  if (job.type === "multi_channel") {
+    const channelHeaders = flattenedChannelHeaders(DEFAULT_MAX_FLATTENED_CHANNELS);
+    finalHeaders = [
+      ...finalHeaders.filter((h) => h !== "channels"),
+      ...channelHeaders,
+    ];
+    finalRows = mergedRows.map((row) => {
+      const channels = parseChannels(safeJsonParse(row.channels));
+      const flat = flattenChannels(channels, DEFAULT_MAX_FLATTENED_CHANNELS);
+      const next: Record<string, string> = { ...row };
+      delete next.channels;
+      return { ...next, ...flat };
+    });
+  }
+
   const csv = serializeCSV(finalRows, finalHeaders);
 
   return new NextResponse(csv, {
@@ -46,4 +71,13 @@ export async function GET(
       "Cache-Control": "no-store",
     },
   });
+}
+
+function safeJsonParse(s: string | undefined): unknown {
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
 }

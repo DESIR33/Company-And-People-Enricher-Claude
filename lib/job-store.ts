@@ -1,6 +1,8 @@
 import { v4 as uuidv4 } from "uuid";
 import { getDb } from "./db";
 import { disposeJobBus, getJobBus } from "./job-events";
+import type { ChannelType } from "./channels/types";
+import type { EnrichmentType } from "./enrichment-fields";
 
 export type CustomFieldDef = { name: string; description: string };
 
@@ -24,7 +26,7 @@ export type EnrichmentRow = {
 
 export type Job = {
   id: string;
-  type: "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
+  type: EnrichmentType;
   status: "pending" | "processing" | "completed" | "failed" | "cancelled";
   createdAt: number;
   updatedAt: number;
@@ -34,6 +36,8 @@ export type Job = {
   newsParams?: { count: number; timeframe: string };
   outreachContext?: string;
   scoreRubric?: ScoreRubric;
+  channelTypes?: ChannelType[];
+  includeOwnerPersonal?: boolean;
   rows: EnrichmentRow[];
   totalRows: number;
   processedRows: number;
@@ -77,6 +81,8 @@ type JobMetaRow = {
   news_params: string | null;
   outreach_context: string | null;
   score_rubric: string | null;
+  channel_types: string | null;
+  include_owner_personal: number | null;
   total_rows: number;
   processed_rows: number;
   error: string | null;
@@ -108,6 +114,11 @@ function jobFromDb(meta: JobMetaRow, rows: JobRowRow[]): Job {
     newsParams: meta.news_params ? JSON.parse(meta.news_params) : undefined,
     outreachContext: meta.outreach_context ?? undefined,
     scoreRubric: meta.score_rubric ? JSON.parse(meta.score_rubric) : undefined,
+    channelTypes: meta.channel_types ? JSON.parse(meta.channel_types) : undefined,
+    includeOwnerPersonal:
+      meta.include_owner_personal === null || meta.include_owner_personal === undefined
+        ? undefined
+        : Boolean(meta.include_owner_personal),
     rows: rows.map(rowFromDb),
     totalRows: meta.total_rows,
     processedRows: meta.processed_rows,
@@ -116,13 +127,15 @@ function jobFromDb(meta: JobMetaRow, rows: JobRowRow[]): Job {
 }
 
 export function createJob(params: {
-  type: "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
+  type: EnrichmentType;
   identifierColumn: string;
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
   outreachContext?: string;
   scoreRubric?: ScoreRubric;
+  channelTypes?: ChannelType[];
+  includeOwnerPersonal?: boolean;
   rows: Record<string, string>[];
 }): Job {
   const db = getDb();
@@ -132,9 +145,11 @@ export function createJob(params: {
 
   const insertMeta = db.prepare(`
     INSERT INTO jobs (id, type, status, created_at, updated_at, identifier_column,
-      requested_fields, custom_field_defs, news_params, outreach_context, score_rubric, total_rows, processed_rows)
+      requested_fields, custom_field_defs, news_params, outreach_context, score_rubric,
+      channel_types, include_owner_personal, total_rows, processed_rows)
     VALUES (@id, @type, 'pending', @now, @now, @identifierColumn,
-      @requestedFields, @customFieldDefs, @newsParams, @outreachContext, @scoreRubric, @totalRows, 0)
+      @requestedFields, @customFieldDefs, @newsParams, @outreachContext, @scoreRubric,
+      @channelTypes, @includeOwnerPersonal, @totalRows, 0)
   `);
   const insertRow = db.prepare(`
     INSERT INTO job_rows (job_id, row_index, original_data, enriched_data, status)
@@ -152,6 +167,11 @@ export function createJob(params: {
       newsParams: params.newsParams ? JSON.stringify(params.newsParams) : null,
       outreachContext: params.outreachContext?.trim() ? params.outreachContext.trim() : null,
       scoreRubric: params.scoreRubric ? JSON.stringify(params.scoreRubric) : null,
+      channelTypes: params.channelTypes && params.channelTypes.length > 0
+        ? JSON.stringify(params.channelTypes)
+        : null,
+      includeOwnerPersonal:
+        params.includeOwnerPersonal === undefined ? null : params.includeOwnerPersonal ? 1 : 0,
       totalRows: params.rows.length,
     });
     for (let i = 0; i < params.rows.length; i++) {

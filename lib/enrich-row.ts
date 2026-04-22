@@ -2,6 +2,10 @@ import { enrichWithAgent } from "./agent";
 import { findWorkEmail } from "./prospeo";
 import { getFields, BUYING_TRIGGER_SIGNAL_FIELDS } from "./enrichment-fields";
 import { updateRow, type Job } from "./job-store";
+import { parseChannels } from "./channels/schema";
+import { rescoreChannels } from "./channels/scoring";
+import { rankChannels } from "./channels/ranker";
+import type { Channel } from "./channels/types";
 
 const NEWS_KEY_RE = /^recent_news_\d+$/;
 
@@ -72,6 +76,61 @@ function actionFromTier(tier: "A" | "B" | "C" | "D"): string {
     case "C": return "Nurture";
     case "D": return "Skip";
   }
+}
+
+// The agent emits `channels` as a JSON array (stringified by normalizeFields).
+// Parse, validate, deterministic-rescore, rerank, and re-stringify so downstream
+// code sees a trusted, ordered list under enrichedData.channels.
+function reconcileMultiChannel(enriched: Record<string, string>): Record<string, string> {
+  const raw = enriched.channels;
+  if (!raw) {
+    return { ...enriched, channels: JSON.stringify([]) };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Agent returned something that wasn't JSON — drop silently and record empty.
+    return { ...enriched, channels: JSON.stringify([]) };
+  }
+  const validated = parseChannels(parsed);
+  const rescored = rescoreChannels(validated);
+  const ranked = rankChannels(rescored);
+  return { ...enriched, channels: JSON.stringify(ranked) };
+}
+
+// Mirror the top-ranked channel of each kind into the legacy flat fields so
+// existing consumers keep working. Only populates a flat field if a matching
+// channel was actually found.
+function mirrorChannelsToLegacyFields(
+  enriched: Record<string, string>
+): Record<string, string> {
+  let channels: Channel[] = [];
+  try {
+    const parsed = JSON.parse(enriched.channels ?? "[]");
+    if (Array.isArray(parsed)) channels = parsed as Channel[];
+  } catch {
+    // ignored — channels field is not valid JSON
+  }
+  if (channels.length === 0) return enriched;
+
+  const top = (type: Channel["type"]) => channels.find((c) => c.type === type);
+  const phone  = top("business_phone_call");
+  const email  = top("email");
+  const ig     = top("instagram_dm");
+  const fb     = top("facebook_messenger");
+  const best   = channels[0];
+
+  const out = { ...enriched };
+  if (phone?.value) out.business_phone    = phone.value;
+  if (email?.value) out.business_email    = email.value;
+  if (ig?.value)    out.instagram_handle  = ig.value;
+  if (fb?.url || fb?.value) out.facebook_page = fb.url ?? fb.value;
+  if (best) {
+    out.best_contact_channel = best.type;
+    out.best_contact_value   = best.value;
+  }
+  return out;
 }
 
 // The agent fills trigger_count and heat_tier, but it can drift (counting "NA"
@@ -160,6 +219,8 @@ export async function enrichRow(
         newsParams: job.newsParams,
         outreachContext: job.outreachContext,
         scoreRubric: job.scoreRubric,
+        channelTypes: job.channelTypes,
+        includeOwnerPersonal: job.includeOwnerPersonal,
         model: opts.model,
         signal: opts.signal,
       });
@@ -175,6 +236,11 @@ export async function enrichRow(
 
     if (job.type === "buying_trigger") {
       enrichedData = reconcileBuyingTriggers(enrichedData, job.requestedFields);
+    }
+
+    if (job.type === "multi_channel") {
+      enrichedData = reconcileMultiChannel(enrichedData);
+      enrichedData = mirrorChannelsToLegacyFields(enrichedData);
     }
 
     if (job.type === "people" && job.requestedFields.includes("work_email")) {

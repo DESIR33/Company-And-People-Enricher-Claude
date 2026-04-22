@@ -448,11 +448,85 @@ export const BUYING_TRIGGER_FIELD_GROUPS: FieldGroup[] = [
   },
 ];
 
+export const MULTI_CHANNEL_FIELD_GROUPS: FieldGroup[] = [
+  {
+    label: "Business",
+    fields: [
+      {
+        key: "business_resolved_name",
+        label: "Resolved Business Name",
+        description: "The canonical business name the agent identified from the input (disambiguated from any lookalikes).",
+      },
+      {
+        key: "business_location",
+        label: "Business Location",
+        description: "City, state/region, country where the business physically operates.",
+      },
+      {
+        key: "business_category",
+        label: "Business Category",
+        description: "Short label for what the business does (e.g. Dentist, Pizzeria, Plumber, Boutique Hotel).",
+      },
+      {
+        key: "website_url",
+        label: "Website URL",
+        description: "Official business website URL.",
+      },
+      {
+        key: "google_business_profile_url",
+        label: "Google Business Profile",
+        description: "URL to the business's Google Business Profile / Google Maps place. Identifier and trust signal only — Google removed Business Profile chat on 2024-07-31, so this is NOT a reachable messaging channel.",
+      },
+      {
+        key: "website_contact_form_url",
+        label: "Website Contact Form URL",
+        description: "Direct URL to the website contact form if present (e.g. /contact, /get-a-quote). 'NA' if only mailto or phone are offered.",
+      },
+    ],
+  },
+  {
+    label: "Owner",
+    fields: [
+      {
+        key: "owner_name",
+        label: "Owner / Decision Maker Name",
+        description: "Full name of the owner, founder, or day-to-day manager (whoever actually makes buying decisions). 'NA' if cannot identify with reasonable confidence.",
+      },
+      {
+        key: "owner_title",
+        label: "Owner Title",
+        description: "Role label: Owner / Founder / General Manager / Principal — whatever best fits.",
+      },
+      {
+        key: "owner_confidence",
+        label: "Owner ID Confidence",
+        description: "High / Medium / Low — how confident you are that this person is actually the decision maker (High = confirmed by ≥2 sources; Low = inferred from single weak signal).",
+      },
+      {
+        key: "owner_evidence",
+        label: "Owner ID Evidence",
+        description: "One sentence explaining WHY you believe this is the decision maker — cite the strongest source.",
+      },
+    ],
+  },
+  {
+    label: "Contact Channels",
+    fields: [
+      {
+        key: "channels",
+        label: "Ranked Contact Channels",
+        description: "A ranked array of reachable contact channels with deliverability, recency, compliance labels, and per-channel first-line openers. This is the primary output — see the Contact Channel Playbook in the system prompt for the structure and rules.",
+      },
+    ],
+  },
+];
+
 export const COMPANY_FIELDS:         FieldDefinition[] = COMPANY_FIELD_GROUPS.flatMap((g)         => g.fields);
 export const PEOPLE_FIELDS:          FieldDefinition[] = PEOPLE_FIELD_GROUPS.flatMap((g)          => g.fields);
 export const DECISION_MAKER_FIELDS:  FieldDefinition[] = DECISION_MAKER_FIELD_GROUPS.flatMap((g)  => g.fields);
 export const LEAD_SCORE_FIELDS:      FieldDefinition[] = LEAD_SCORE_FIELD_GROUPS.flatMap((g)      => g.fields);
 export const BUYING_TRIGGER_FIELDS:  FieldDefinition[] = BUYING_TRIGGER_FIELD_GROUPS.flatMap((g)  => g.fields);
+export const MULTI_CHANNEL_FIELDS:   FieldDefinition[] = MULTI_CHANNEL_FIELD_GROUPS.flatMap((g)   => g.fields);
 
 export const LEAD_SCORE_REQUIRED_FIELDS: string[] = [
   "icp_fit_score",
@@ -492,14 +566,31 @@ export const BUYING_TRIGGER_SIGNAL_FIELDS: string[] = [
   "product_launch",
 ];
 
-export type EnrichmentType = "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
+// Multi-channel jobs must always produce the structured channels output and
+// the owner identification block — that IS the product. If the caller forgets
+// to include them, the API adds them.
+export const MULTI_CHANNEL_REQUIRED_FIELDS: string[] = [
+  "business_resolved_name",
+  "owner_name",
+  "owner_confidence",
+  "channels",
+];
+
+export type EnrichmentType =
+  | "company"
+  | "people"
+  | "decision_maker"
+  | "lead_score"
+  | "buying_trigger"
+  | "multi_channel";
 
 export function getFields(type: EnrichmentType): FieldDefinition[] {
   if (type === "company")         return COMPANY_FIELDS;
   if (type === "people")          return PEOPLE_FIELDS;
   if (type === "decision_maker")  return DECISION_MAKER_FIELDS;
   if (type === "lead_score")      return LEAD_SCORE_FIELDS;
-  return BUYING_TRIGGER_FIELDS;
+  if (type === "buying_trigger")  return BUYING_TRIGGER_FIELDS;
+  return MULTI_CHANNEL_FIELDS;
 }
 
 export function getFieldGroups(type: EnrichmentType): FieldGroup[] {
@@ -507,5 +598,6 @@ export function getFieldGroups(type: EnrichmentType): FieldGroup[] {
   if (type === "people")          return PEOPLE_FIELD_GROUPS;
   if (type === "decision_maker")  return DECISION_MAKER_FIELD_GROUPS;
   if (type === "lead_score")      return LEAD_SCORE_FIELD_GROUPS;
-  return BUYING_TRIGGER_FIELD_GROUPS;
+  if (type === "buying_trigger")  return BUYING_TRIGGER_FIELD_GROUPS;
+  return MULTI_CHANNEL_FIELD_GROUPS;
 }

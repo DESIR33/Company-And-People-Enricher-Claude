@@ -15,7 +15,9 @@ import {
   LEAD_SCORE_REQUIRED_FIELDS,
   BUYING_TRIGGER_REQUIRED_FIELDS,
   BUYING_TRIGGER_SIGNAL_FIELDS,
+  MULTI_CHANNEL_REQUIRED_FIELDS,
 } from "@/lib/enrichment-fields";
+import { CHANNEL_TYPES } from "@/lib/channels/types";
 
 const MAX_ROWS = 200;
 const MAX_ROWS_LEAD_SCORE = 500;
@@ -59,7 +61,7 @@ const ScoreRubricSchema = z.object({
 });
 
 const EnrichRequestSchema = z.object({
-  type: z.enum(["company", "people", "decision_maker", "lead_score", "buying_trigger"]),
+  type: z.enum(["company", "people", "decision_maker", "lead_score", "buying_trigger", "multi_channel"]),
   csvContent: z.string().min(1, "csvContent is required"),
   identifierColumn: z.string().min(1, "identifierColumn is required"),
   requestedFields: z
@@ -70,6 +72,8 @@ const EnrichRequestSchema = z.object({
   newsParams: NewsParamsSchema.optional(),
   outreachContext: z.string().trim().max(500, "outreachContext is too long").optional(),
   scoreRubric: ScoreRubricSchema.optional(),
+  channelTypes: z.array(z.enum(CHANNEL_TYPES)).min(1).max(CHANNEL_TYPES.length).optional(),
+  includeOwnerPersonal: z.boolean().optional(),
 });
 
 async function processJob(jobId: string): Promise<void> {
@@ -130,7 +134,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid request", issues }, { status: 400 });
   }
 
-  const { type, csvContent, identifierColumn, requestedFields, customFieldDefs, newsParams, outreachContext, scoreRubric } = parsed.data;
+  const {
+    type,
+    csvContent,
+    identifierColumn,
+    requestedFields,
+    customFieldDefs,
+    newsParams,
+    outreachContext,
+    scoreRubric,
+    channelTypes,
+    includeOwnerPersonal,
+  } = parsed.data;
 
   if (type === "lead_score" && !scoreRubric) {
     return NextResponse.json(
@@ -232,6 +247,16 @@ export async function POST(request: NextRequest) {
       ];
     }
 
+    // Multi-channel jobs must always produce the ranked channels[] + owner
+    // identification block — that IS the product.
+    if (type === "multi_channel") {
+      const existing = new Set(requestedFields);
+      finalRequestedFields = [
+        ...requestedFields,
+        ...MULTI_CHANNEL_REQUIRED_FIELDS.filter((f) => !existing.has(f)),
+      ];
+    }
+
     const job = createJob({
       type,
       identifierColumn,
@@ -240,6 +265,8 @@ export async function POST(request: NextRequest) {
       newsParams,
       outreachContext,
       scoreRubric,
+      channelTypes,
+      includeOwnerPersonal,
       rows,
     });
 

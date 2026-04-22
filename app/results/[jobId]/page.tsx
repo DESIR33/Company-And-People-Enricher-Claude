@@ -46,7 +46,7 @@ type JobRow = {
 
 type JobData = {
   jobId: string;
-  type: "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
+  type: "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger" | "multi_channel";
   status: "pending" | "processing" | "completed" | "failed" | "cancelled";
   totalRows: number;
   processedRows: number;
