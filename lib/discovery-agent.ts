@@ -1,6 +1,20 @@
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
 import type { DiscoveryMode } from "./discovery-store";
 
+export type SignalAgentConfig = {
+  signalType: "funding" | "hiring" | "news";
+  timeframe: string;
+  industryFilter?: string;
+  geoFilter?: string;
+  sizeFilter?: string;
+  stageFilter?: string[];
+  minAmount?: number;
+  maxAmount?: number;
+  roles?: string[];
+  keywords?: string[];
+  excludeDomains?: string[];
+};
+
 export type DiscoveredCompany = {
   companyName: string;
   websiteUrl?: string;
@@ -24,6 +38,7 @@ type DiscoveryParams = {
   mode: DiscoveryMode;
   queryText: string;
   seedCompanies?: string[];
+  signalConfig?: SignalAgentConfig;
   maxResults: number;
   signal?: AbortSignal;
   model?: string;
@@ -82,7 +97,91 @@ Rules for fields:
 
 If you find nothing, return {"note":"...","companies":[]}. DO NOT include markdown.`;
 
+function renderFilters(cfg: SignalAgentConfig): string {
+  const parts: string[] = [];
+  if (cfg.industryFilter) parts.push(`Industry: ${cfg.industryFilter}`);
+  if (cfg.geoFilter) parts.push(`Geography: ${cfg.geoFilter}`);
+  if (cfg.sizeFilter) parts.push(`Size: ${cfg.sizeFilter}`);
+  if (cfg.stageFilter?.length) parts.push(`Stages: ${cfg.stageFilter.join(", ")}`);
+  if (cfg.minAmount !== undefined)
+    parts.push(`Min raise: $${cfg.minAmount.toLocaleString()}`);
+  if (cfg.maxAmount !== undefined)
+    parts.push(`Max raise: $${cfg.maxAmount.toLocaleString()}`);
+  if (cfg.roles?.length) parts.push(`Roles: ${cfg.roles.join(", ")}`);
+  if (cfg.keywords?.length) parts.push(`Keywords: ${cfg.keywords.join(", ")}`);
+  return parts.length === 0 ? "(none)" : parts.join(" · ");
+}
+
+function buildSignalUser(params: DiscoveryParams): string {
+  const cfg = params.signalConfig!;
+  const filters = renderFilters(cfg);
+  const extra = params.queryText.trim()
+    ? `\n\nAdditional ICP constraints: ${params.queryText.trim()}`
+    : "";
+  const exclude = cfg.excludeDomains?.length
+    ? `\n\nEXCLUDE these domains (already found in prior runs): ${cfg.excludeDomains.slice(0, 50).join(", ")}`
+    : "";
+
+  if (cfg.signalType === "funding") {
+    return `Find up to ${params.maxResults} companies that recently raised funding within ${cfg.timeframe}.
+
+Filters: ${filters}${extra}${exclude}
+
+Workflow:
+1. Search funding news sources: TechCrunch, Crunchbase News, Axios Pro Rata, VentureBeat, Fortune Term Sheet, PitchBook News, Reuters deals, SEC Form D filings (efts.sec.gov).
+2. For each funding announcement within ${cfg.timeframe}, verify the company matches the filters above.
+3. matchReason MUST include the round size, round stage, and announcement date — e.g. "Raised $12M Series A on 2026-04-15".
+4. Skip rumour/unconfirmed raises. Prefer announcements with a press release or TechCrunch byline.
+5. Skip companies already in the exclude list.
+
+Target: ${params.maxResults} verified companies with fresh funding.`;
+  }
+
+  if (cfg.signalType === "hiring") {
+    const roles = cfg.roles?.join(", ") || "any revenue-facing role";
+    return `Find up to ${params.maxResults} companies that are actively hiring for: ${roles}. Postings must be fresh within ${cfg.timeframe}.
+
+Filters: ${filters}${extra}${exclude}
+
+Workflow:
+1. Search LinkedIn Jobs, Indeed, company /careers pages, Wellfound (AngelList), Y Combinator Jobs. Google queries like: "${roles}" site:linkedin.com/jobs "posted <timeframe>" / "hiring ${roles}" intitle:careers.
+2. Prefer roles posted within ${cfg.timeframe}. Skip postings older than that.
+3. matchReason MUST name the role and where the posting was found — e.g. "Hiring 2 SDRs on LinkedIn Jobs, posted 5 days ago".
+4. Hiring for GTM / growth / leadership roles is a strong buying signal — weight those higher in the score.
+5. Skip companies already in the exclude list.
+
+Target: ${params.maxResults} companies hiring within the timeframe.`;
+  }
+
+  // news
+  const keywords =
+    cfg.keywords?.join(", ") ||
+    "expansion, new location, product launch, partnership, acquisition, rebrand";
+  return `Find up to ${params.maxResults} companies in the news for these signals: ${keywords}. News must be within ${cfg.timeframe}.
+
+Filters: ${filters}${extra}${exclude}
+
+Workflow:
+1. Search Google News, Reuters, Bloomberg, industry trade press, local business journals (Biz Journals, Crain's), PR wires.
+2. Prefer concrete events (ribbon cuttings, store openings, product launches) over vague puff pieces.
+3. matchReason MUST cite the headline and publication date — e.g. "Opened new Dallas office — Dallas Business Journal, 2026-04-10".
+4. Skip companies already in the exclude list.
+
+Target: ${params.maxResults} companies with a fresh news signal.`;
+}
+
 function buildPrompts(params: DiscoveryParams): { system: string; user: string } {
+  if (
+    params.mode === "signal_funding" ||
+    params.mode === "signal_hiring" ||
+    params.mode === "signal_news"
+  ) {
+    if (!params.signalConfig) {
+      throw new Error("signalConfig is required for signal_* modes");
+    }
+    return { system: COMMON_SYSTEM, user: buildSignalUser(params) };
+  }
+
   if (params.mode === "lookalike") {
     const seeds = (params.seedCompanies ?? []).filter(Boolean);
     const list = seeds.map((s, i) => `${i + 1}. ${s}`).join("\n");

@@ -1,4 +1,4 @@
-import { discoverCompanies } from "./discovery-agent";
+import { discoverCompanies, type SignalAgentConfig } from "./discovery-agent";
 import {
   appendDiscoveryLog,
   clearSearchAbort,
@@ -15,7 +15,10 @@ export type StartSearchResult =
   | { status: "started"; searchId: string }
   | { status: "cap_exceeded"; reason: string };
 
-export async function executeSearch(searchId: string): Promise<void> {
+export async function executeSearch(
+  searchId: string,
+  opts: { signalConfig?: SignalAgentConfig } = {}
+): Promise<void> {
   const init = getSearch(searchId);
   if (!init) return;
 
@@ -34,6 +37,7 @@ export async function executeSearch(searchId: string): Promise<void> {
       mode: init.mode,
       queryText: init.queryText,
       seedCompanies: init.seedCompanies,
+      signalConfig: opts.signalConfig,
       maxResults: init.maxResults,
       signal: abort.signal,
       onLog: (line) => appendDiscoveryLog(searchId, line),

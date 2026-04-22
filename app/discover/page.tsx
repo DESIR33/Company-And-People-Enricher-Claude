@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Search,
   Target,
@@ -73,10 +73,26 @@ const DEFAULT_ENRICH_FIELDS = [
 ];
 
 export default function DiscoverPage() {
+  return (
+    <Suspense fallback={null}>
+      <DiscoverPageInner />
+    </Suspense>
+  );
+}
+
+function DiscoverPageInner() {
   const [searches, setSearches] = useState<DiscoverySearch[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const searchParams = useSearchParams();
+  const deepLinkId = searchParams.get("search");
+
+  useEffect(() => {
+    if (!deepLinkId) return;
+    const t = setTimeout(() => setActiveId(deepLinkId), 0);
+    return () => clearTimeout(t);
+  }, [deepLinkId]);
 
   const loadSearches = useCallback(async () => {
     try {

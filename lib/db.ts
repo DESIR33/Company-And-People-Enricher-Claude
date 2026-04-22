@@ -124,7 +124,8 @@ function init(db: Database.Database): void {
       cost_usd REAL NOT NULL DEFAULT 0,
       discovery_log TEXT,
       agent_note TEXT,
-      error TEXT
+      error TEXT,
+      parent_monitor_id TEXT
     );
     CREATE TABLE IF NOT EXISTS discovered_leads (
       id TEXT PRIMARY KEY,
@@ -144,7 +145,38 @@ function init(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_discovered_leads_search
       ON discovered_leads(search_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_discovery_searches_parent
+      ON discovery_searches(parent_monitor_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS signal_monitors (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      signal_type TEXT NOT NULL,
+      config TEXT NOT NULL,
+      schedule TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      max_results INTEGER NOT NULL DEFAULT 25,
+      timeframe TEXT NOT NULL DEFAULT 'last 14 days',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_run_at INTEGER,
+      next_run_at INTEGER,
+      run_count INTEGER NOT NULL DEFAULT 0,
+      lead_count_total INTEGER NOT NULL DEFAULT 0,
+      cost_usd_total REAL NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_signal_monitors_due
+      ON signal_monitors(active, next_run_at);
   `);
+  // parent_monitor_id is nullable and inline on discovery_searches for fresh
+  // installs; existing dev DBs from Phase 1 need the column backfilled.
+  const searchColumns = new Set(
+    (db.prepare(`PRAGMA table_info(discovery_searches)`).all() as { name: string }[]).map(
+      (c) => c.name
+    )
+  );
+  if (!searchColumns.has("parent_monitor_id")) {
+    db.exec(`ALTER TABLE discovery_searches ADD COLUMN parent_monitor_id TEXT`);
+  }
   // Backfill new columns on pre-existing databases.
   const jobColumns = new Set(
     (db.prepare(`PRAGMA table_info(jobs)`).all() as { name: string }[]).map((c) => c.name)

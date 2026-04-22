@@ -1,7 +1,12 @@
 import { v4 as uuidv4 } from "uuid";
 import { getDb } from "./db";
 
-export type DiscoveryMode = "icp" | "lookalike";
+export type DiscoveryMode =
+  | "icp"
+  | "lookalike"
+  | "signal_funding"
+  | "signal_hiring"
+  | "signal_news";
 
 export type DiscoveryStatus =
   | "queued"
@@ -27,6 +32,7 @@ export type DiscoverySearch = {
   discoveryLog: string[];
   agentNote?: string;
   error?: string;
+  parentMonitorId?: string;
 };
 
 export type DiscoveredLead = {
@@ -62,6 +68,7 @@ type SearchRow = {
   discovery_log: string | null;
   agent_note: string | null;
   error: string | null;
+  parent_monitor_id: string | null;
 };
 
 type LeadRow = {
@@ -98,6 +105,7 @@ function searchFromRow(r: SearchRow): DiscoverySearch {
     discoveryLog: r.discovery_log ? JSON.parse(r.discovery_log) : [],
     agentNote: r.agent_note ?? undefined,
     error: r.error ?? undefined,
+    parentMonitorId: r.parent_monitor_id ?? undefined,
   };
 }
 
@@ -125,6 +133,7 @@ export function createSearch(params: {
   queryText: string;
   seedCompanies?: string[];
   maxResults: number;
+  parentMonitorId?: string;
 }): DiscoverySearch {
   const db = getDb();
   const id = uuidv4();
@@ -132,9 +141,9 @@ export function createSearch(params: {
   db.prepare(
     `INSERT INTO discovery_searches (
       id, mode, name, query_text, seed_companies, max_results, status,
-      created_at, updated_at
+      created_at, updated_at, parent_monitor_id
     ) VALUES (@id, @mode, @name, @queryText, @seedCompanies, @maxResults, 'queued',
-              @now, @now)`
+              @now, @now, @parentMonitorId)`
   ).run({
     id,
     mode: params.mode,
@@ -144,6 +153,7 @@ export function createSearch(params: {
       ? JSON.stringify(params.seedCompanies)
       : null,
     maxResults: params.maxResults,
+    parentMonitorId: params.parentMonitorId ?? null,
     now,
   });
   return getSearch(id)!;
@@ -165,6 +175,46 @@ export function listSearches(limit = 50): DiscoverySearch[] {
     )
     .all(limit) as SearchRow[];
   return rows.map(searchFromRow);
+}
+
+export function listSearchesByMonitor(
+  monitorId: string,
+  limit = 50
+): DiscoverySearch[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM discovery_searches
+         WHERE parent_monitor_id = ?
+         ORDER BY created_at DESC LIMIT ?`
+    )
+    .all(monitorId, limit) as SearchRow[];
+  return rows.map(searchFromRow);
+}
+
+export function listDomainsByMonitor(monitorId: string, limit = 500): string[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT dl.website_url AS url
+         FROM discovered_leads dl
+         JOIN discovery_searches ds ON ds.id = dl.search_id
+         WHERE ds.parent_monitor_id = ?
+           AND dl.website_url IS NOT NULL
+         ORDER BY dl.created_at DESC
+         LIMIT ?`
+    )
+    .all(monitorId, limit) as { url: string }[];
+  const hosts = new Set<string>();
+  for (const r of rows) {
+    try {
+      const host = new URL(r.url).hostname.replace(/^www\./, "").toLowerCase();
+      if (host) hosts.add(host);
+    } catch {
+      // ignore malformed URLs
+    }
+  }
+  return Array.from(hosts);
 }
 
 const SEARCH_FIELD_TO_COLUMN: Record<string, string> = {
