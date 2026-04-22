@@ -2,6 +2,11 @@ import { enrichWithAgent } from "./agent";
 import { findWorkEmail } from "./prospeo";
 import { getFields, BUYING_TRIGGER_SIGNAL_FIELDS } from "./enrichment-fields";
 import { updateRow, type Job } from "./job-store";
+import { parseChannels } from "./channels/schema";
+import { rescoreChannels } from "./channels/scoring";
+import { rankChannels } from "./channels/ranker";
+import { applySuppression, buildSuppressionIndex } from "./channels/suppression";
+import type { Channel } from "./channels/types";
 
 const NEWS_KEY_RE = /^recent_news_\d+$/;
 
@@ -74,6 +79,68 @@ function actionFromTier(tier: "A" | "B" | "C" | "D"): string {
   }
 }
 
+// The agent emits `channels` as a JSON array (stringified by normalizeFields).
+// Parse, validate, apply suppression, rescore, rerank, and re-stringify so
+// downstream code sees a trusted, ordered list under enrichedData.channels.
+// Suppression runs BEFORE re-scoring so the compliance penalty on suppressed
+// channels is baked into the final score.
+function reconcileMultiChannel(
+  enriched: Record<string, string>,
+  suppressionList: readonly string[] | undefined
+): Record<string, string> {
+  const raw = enriched.channels;
+  if (!raw) {
+    return { ...enriched, channels: JSON.stringify([]) };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // Agent returned something that wasn't JSON — drop silently and record empty.
+    return { ...enriched, channels: JSON.stringify([]) };
+  }
+  const validated = parseChannels(parsed);
+  const suppressionIndex = buildSuppressionIndex(suppressionList);
+  const suppressed = applySuppression(validated, suppressionIndex);
+  const rescored = rescoreChannels(suppressed);
+  const ranked = rankChannels(rescored);
+  return { ...enriched, channels: JSON.stringify(ranked) };
+}
+
+// Mirror the top-ranked channel of each kind into the legacy flat fields so
+// existing consumers keep working. Only populates a flat field if a matching
+// channel was actually found.
+function mirrorChannelsToLegacyFields(
+  enriched: Record<string, string>
+): Record<string, string> {
+  let channels: Channel[] = [];
+  try {
+    const parsed = JSON.parse(enriched.channels ?? "[]");
+    if (Array.isArray(parsed)) channels = parsed as Channel[];
+  } catch {
+    // ignored — channels field is not valid JSON
+  }
+  if (channels.length === 0) return enriched;
+
+  const top = (type: Channel["type"]) => channels.find((c) => c.type === type);
+  const phone  = top("business_phone_call");
+  const email  = top("email");
+  const ig     = top("instagram_dm");
+  const fb     = top("facebook_messenger");
+  const best   = channels[0];
+
+  const out = { ...enriched };
+  if (phone?.value) out.business_phone    = phone.value;
+  if (email?.value) out.business_email    = email.value;
+  if (ig?.value)    out.instagram_handle  = ig.value;
+  if (fb?.url || fb?.value) out.facebook_page = fb.url ?? fb.value;
+  if (best) {
+    out.best_contact_channel = best.type;
+    out.best_contact_value   = best.value;
+  }
+  return out;
+}
+
 // The agent fills trigger_count and heat_tier, but it can drift (counting "NA"
 // as a trigger, picking a tier that doesn't match the score). Recompute both
 // from the observable signal fields so the downstream sort is trustworthy.
@@ -126,8 +193,8 @@ export async function enrichRow(
   const row = job.rows[rowIndex];
   if (!row) return;
 
-  const identifier = row.originalData[job.identifierColumn]?.trim() ?? "";
-  if (identifier === "") {
+  const rawIdentifier = row.originalData[job.identifierColumn]?.trim() ?? "";
+  if (rawIdentifier === "") {
     updateRow(jobId, rowIndex, {
       status: "error",
       error: "Missing identifier value",
@@ -135,6 +202,14 @@ export async function enrichRow(
     });
     return;
   }
+
+  // When a separate city column is provided, append it to the identifier so
+  // the agent can disambiguate common business names ("Joe's Pizza" → which
+  // one?) without forcing users to pre-concatenate the CSV.
+  const cityValue = job.cityColumn
+    ? row.originalData[job.cityColumn]?.trim() ?? ""
+    : "";
+  const identifier = cityValue ? `${rawIdentifier}, ${cityValue}` : rawIdentifier;
 
   const validFieldKeys = new Set(getFields(job.type).map((f) => f.key));
   const customFieldNames = new Set((job.customFieldDefs ?? []).map((f) => f.name));
@@ -160,6 +235,8 @@ export async function enrichRow(
         newsParams: job.newsParams,
         outreachContext: job.outreachContext,
         scoreRubric: job.scoreRubric,
+        channelTypes: job.channelTypes,
+        includeOwnerPersonal: job.includeOwnerPersonal,
         model: opts.model,
         signal: opts.signal,
       });
@@ -175,6 +252,11 @@ export async function enrichRow(
 
     if (job.type === "buying_trigger") {
       enrichedData = reconcileBuyingTriggers(enrichedData, job.requestedFields);
+    }
+
+    if (job.type === "multi_channel") {
+      enrichedData = reconcileMultiChannel(enrichedData, job.suppressionList);
+      enrichedData = mirrorChannelsToLegacyFields(enrichedData);
     }
 
     if (job.type === "people" && job.requestedFields.includes("work_email")) {

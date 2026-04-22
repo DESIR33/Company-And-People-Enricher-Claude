@@ -26,10 +26,22 @@ import {
   UserSearch,
   Target,
   Flame,
+  MessageCircle,
+  Phone,
+  Mail,
+  Megaphone,
+  MessageSquare,
+  Copy,
+  Check,
+  ExternalLink,
+  ChevronDown,
+  ChevronUp,
   StopCircle,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { getFields } from "@/lib/enrichment-fields";
+import { CHANNEL_TYPE_LABEL, type Channel, type ChannelType } from "@/lib/channels/types";
+import { buildDeepLink } from "@/lib/channels/deeplink";
 
 type RowStatus = "pending" | "processing" | "done" | "error";
 
@@ -46,7 +58,7 @@ type JobRow = {
 
 type JobData = {
   jobId: string;
-  type: "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
+  type: "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger" | "multi_channel";
   status: "pending" | "processing" | "completed" | "failed" | "cancelled";
   totalRows: number;
   processedRows: number;
@@ -84,6 +96,328 @@ function RowStatusIcon({ status }: { status: RowStatus }) {
 
 function toTitleCase(str: string): string {
   return str.replace(/[_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Returns { localTime, isLikelyOpen, tz } for a business given an IANA
+// timezone string. isLikelyOpen is a crude heuristic: Mon-Sat 8am-8pm in the
+// business's local time. It exists so the UI can flash a "probably closed"
+// warning before the user calls at midnight, NOT as authoritative hours.
+function businessLocalTimeInfo(
+  tz: string | undefined
+): { localTime: string; isLikelyOpen: boolean; tz: string } | null {
+  const trimmed = tz?.trim();
+  if (!trimmed || trimmed.toUpperCase() === "NA") return null;
+  try {
+    const now = new Date();
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: trimmed,
+      hour: "numeric",
+      minute: "2-digit",
+      weekday: "short",
+    });
+    const parts = fmt.formatToParts(now);
+    const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "");
+    const dayPart = parts.find((p) => p.type === "weekday")?.value ?? "";
+    const dayPeriod = parts.find((p) => p.type === "dayPeriod")?.value ?? "";
+    const isSunday = dayPart === "Sun";
+    // Convert to 24h hour for the open-window check.
+    let h24 = hour;
+    if (dayPeriod.toLowerCase() === "pm" && hour !== 12) h24 = hour + 12;
+    if (dayPeriod.toLowerCase() === "am" && hour === 12) h24 = 0;
+    const isLikelyOpen = !isSunday && h24 >= 8 && h24 < 20;
+    const localTime = fmt.format(now);
+    return { localTime, isLikelyOpen, tz: trimmed };
+  } catch {
+    return null;
+  }
+}
+
+// Channel icon per type. Falls back to a generic chat bubble so a new channel
+// type added to the schema later doesn't crash the cell.
+const CHANNEL_ICON: Record<ChannelType, typeof MessageCircle> = {
+  business_phone_call: Phone,
+  sms_mobile: MessageSquare,
+  whatsapp: MessageCircle,
+  instagram_dm: MessageCircle,
+  facebook_messenger: MessageSquare,
+  tiktok_dm: MessageCircle,
+  youtube: Megaphone,
+  nextdoor: MessageCircle,
+  yelp_angi_thumbtack: Megaphone,
+  email: Mail,
+};
+
+function complianceChipClasses(label: string): string {
+  switch (label) {
+    case "ok":                   return "bg-emerald-100 text-emerald-700";
+    case "ok_manual_only":       return "bg-blue-100 text-blue-700";
+    case "requires_consent":     return "bg-amber-100 text-amber-800";
+    case "restricted_by_region": return "bg-amber-100 text-amber-800";
+    case "do_not_use":           return "bg-red-100 text-red-700";
+    default:                     return "bg-gray-100 text-gray-600";
+  }
+}
+
+function complianceShortLabel(label: string): string {
+  switch (label) {
+    case "ok":                   return "OK";
+    case "ok_manual_only":       return "Manual";
+    case "requires_consent":     return "Consent";
+    case "restricted_by_region": return "Region";
+    case "do_not_use":           return "Skip";
+    default:                     return label;
+  }
+}
+
+function scoreChipClasses(score: number): string {
+  if (score >= 70) return "bg-emerald-100 text-emerald-700";
+  if (score >= 45) return "bg-blue-100 text-blue-700";
+  if (score >= 20) return "bg-amber-100 text-amber-800";
+  return "bg-gray-100 text-gray-500";
+}
+
+function safeParseChannels(raw: string): Channel[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as Channel[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Small reusable button that copies a string to the clipboard and flashes a
+// check mark for 1.2s so the user knows it worked. Falls back silently if
+// clipboard API is unavailable (e.g. insecure context).
+function CopyButton({ text, label, title }: { text: string; label: string; title: string }) {
+  const [copied, setCopied] = useState(false);
+  const onClick = useCallback(async () => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // Clipboard blocked — do nothing; user can still select and copy manually.
+    }
+  }, [text]);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        void onClick();
+      }}
+      title={title}
+      className={clsx(
+        "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors",
+        copied
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-pampas text-cloudy hover:bg-white hover:text-gray-900 border border-cloudy/30"
+      )}
+    >
+      {copied ? <Check className="w-3 h-3" strokeWidth={2.5} /> : <Copy className="w-3 h-3" strokeWidth={2} />}
+      <span>{copied ? "Copied" : label}</span>
+    </button>
+  );
+}
+
+function ChannelRow({ c, expanded }: { c: Channel; expanded: boolean }) {
+  const Icon = CHANNEL_ICON[c.type] ?? MessageCircle;
+  const deepLink = buildDeepLink(c);
+  return (
+    <div className="flex flex-col gap-1 border-b border-cloudy/10 last:border-b-0 py-1">
+      <div className="flex items-center gap-2 min-w-0">
+        <Icon className="w-3.5 h-3.5 text-cloudy flex-shrink-0" strokeWidth={2} />
+        <span
+          className="text-[11px] text-gray-900 font-medium truncate flex-1 min-w-0"
+          title={`${CHANNEL_TYPE_LABEL[c.type]}${c.rank_rationale ? ` — ${c.rank_rationale}` : ""}`}
+        >
+          {c.value}
+          {c.scope === "owner_personal" && (
+            <span className="ml-1 text-[10px] text-cloudy italic">owner</span>
+          )}
+        </span>
+        <span className={clsx(
+          "inline-flex items-center justify-center min-w-7 px-1 py-0.5 rounded text-[10px] font-semibold tabular-nums flex-shrink-0",
+          scoreChipClasses(c.reachability_score)
+        )}>
+          {c.reachability_score}
+        </span>
+        <span
+          className={clsx(
+            "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0",
+            complianceChipClasses(c.compliance_label)
+          )}
+          title={c.compliance_note}
+        >
+          {complianceShortLabel(c.compliance_label)}
+        </span>
+      </div>
+      {expanded && (
+        <>
+          <div className="flex flex-wrap items-center gap-1 pl-5">
+            {c.value && (
+              <CopyButton text={c.value} label="Copy value" title={`Copy ${c.value}`} />
+            )}
+            {c.first_line && c.first_line !== "NA" && (
+              <CopyButton
+                text={c.first_line}
+                label="Copy first line"
+                title="Copy the channel-appropriate opener"
+              />
+            )}
+            {deepLink.href && (
+              <a
+                href={deepLink.href}
+                target={deepLink.href.startsWith("http") ? "_blank" : undefined}
+                rel={deepLink.href.startsWith("http") ? "noopener noreferrer" : undefined}
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-brand-500 text-white hover:bg-brand-600 transition-colors"
+                title={deepLink.href}
+              >
+                <ExternalLink className="w-3 h-3" strokeWidth={2} />
+                {deepLink.label}
+              </a>
+            )}
+          </div>
+          {c.first_line && c.first_line !== "NA" && (
+            <p
+              className="pl-5 text-[11px] text-gray-700 italic leading-relaxed"
+              title={c.rank_rationale}
+            >
+              “{c.first_line}”
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function LocalTimeCell({ tz }: { tz: string }) {
+  // Self-ticking clock so the badge doesn't go stale mid-session. One-minute
+  // tick is enough since the open/closed band has 12-hour granularity.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  // `now` is reactive — recompute each render.
+  void now;
+  const info = businessLocalTimeInfo(tz);
+  if (!info) {
+    return tz
+      ? <span className="text-cloudy text-xs">{tz}</span>
+      : <span className="text-cloudy/40 text-xs">—</span>;
+  }
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[11px] text-gray-900 font-medium tabular-nums">
+        {info.localTime}
+      </span>
+      <span className="text-[10px] text-cloudy">{info.tz}</span>
+      <span className={clsx(
+        "inline-flex items-center self-start px-1.5 py-0.5 rounded text-[10px] font-medium",
+        info.isLikelyOpen
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-amber-100 text-amber-800"
+      )}>
+        {info.isLikelyOpen ? "Likely open" : "Likely closed"}
+      </span>
+    </div>
+  );
+}
+
+function ChannelsCell({ raw }: { raw: string }) {
+  const channels = safeParseChannels(raw);
+  const [expanded, setExpanded] = useState(false);
+  if (channels.length === 0) {
+    return <span className="text-cloudy/40 text-xs">—</span>;
+  }
+  const COLLAPSED_N = 3;
+  const visible = expanded ? channels : channels.slice(0, COLLAPSED_N);
+  const extra = channels.length - COLLAPSED_N;
+  return (
+    <div className="flex flex-col gap-0.5 max-w-[26rem]">
+      {visible.map((c) => (
+        <ChannelRow key={`${c.type}::${c.scope}`} c={c} expanded={expanded} />
+      ))}
+      {(channels.length > COLLAPSED_N || extra > 0) && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+          className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-cloudy hover:text-brand-500 transition-colors self-start"
+        >
+          {expanded ? (
+            <>
+              <ChevronUp className="w-3 h-3" strokeWidth={2.5} />
+              Collapse
+            </>
+          ) : (
+            <>
+              <ChevronDown className="w-3 h-3" strokeWidth={2.5} />
+              Show all + actions ({channels.length})
+            </>
+          )}
+        </button>
+      )}
+      {!expanded && extra <= 0 && channels.length > 0 && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded(true);
+          }}
+          className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-cloudy hover:text-brand-500 transition-colors self-start"
+        >
+          <ChevronDown className="w-3 h-3" strokeWidth={2.5} />
+          Show actions
+        </button>
+      )}
+    </div>
+  );
+}
+
+type ChannelCoverage = {
+  rowsWithChannels: number;
+  totalChannels: number;
+  actionableToday: number; // top-ranked channel has ok / ok_manual_only compliance
+  avgPerRow: number;
+  topTypeCounts: Map<ChannelType, number>;
+};
+
+function computeChannelCoverage(rows: JobRow[]): ChannelCoverage {
+  let rowsWithChannels = 0;
+  let totalChannels = 0;
+  let actionableToday = 0;
+  const topTypeCounts = new Map<ChannelType, number>();
+  let doneRows = 0;
+  for (const r of rows) {
+    if (r.status !== "done") continue;
+    doneRows++;
+    const channels = safeParseChannels(r.enrichedData?.channels ?? "");
+    if (channels.length === 0) continue;
+    rowsWithChannels++;
+    totalChannels += channels.length;
+    const top = channels[0];
+    if (top && (top.compliance_label === "ok" || top.compliance_label === "ok_manual_only")) {
+      actionableToday++;
+    }
+    if (top) {
+      topTypeCounts.set(top.type, (topTypeCounts.get(top.type) ?? 0) + 1);
+    }
+  }
+  return {
+    rowsWithChannels,
+    totalChannels,
+    actionableToday,
+    avgPerRow: doneRows > 0 ? totalChannels / doneRows : 0,
+    topTypeCounts,
+  };
 }
 
 export default function ResultsPage() {
@@ -273,11 +607,25 @@ export default function ResultsPage() {
       id: `e_${key}`,
       header: labelMap[key] ?? toTitleCase(key),
       accessorFn: (row) => (enrichedSet.has(key) ? row[key] ?? "" : ""),
+      size: key === "channels" ? 380 : undefined,
+      enableGlobalFilter: key !== "channels",
       cell: ({ getValue, row }) => {
         const v      = getValue() as string;
         const status = row.original._status as RowStatus;
         if (status === "pending" || status === "processing")
           return <span className="text-cloudy/40 text-xs">—</span>;
+
+        // Structured channels field — render as a compact card list instead
+        // of the raw JSON the generic renderer would produce.
+        if (key === "channels") {
+          return <ChannelsCell raw={v} />;
+        }
+
+        // Business timezone — show the CURRENT local time there + a rough
+        // open/closed badge so the user doesn't cold-call at 11pm.
+        if (key === "business_timezone") {
+          return <LocalTimeCell tz={v} />;
+        }
 
         // Numeric score — render as a colored pill.
         if (SCORE_FIELDS.has(key) && v) {
@@ -425,12 +773,14 @@ export default function ResultsPage() {
     : jobData.type === "people"         ? Users
     : jobData.type === "lead_score"     ? Target
     : jobData.type === "buying_trigger" ? Flame
+    : jobData.type === "multi_channel"  ? MessageCircle
     : UserSearch;
   const typeLabel  =
     jobData.type === "company"          ? "Company"
     : jobData.type === "people"         ? "People"
     : jobData.type === "lead_score"     ? "Lead Score"
     : jobData.type === "buying_trigger" ? "Buying Triggers"
+    : jobData.type === "multi_channel"  ? "Multi-Channel"
     : "Decision Maker";
 
   const cacheReadTotal     = jobData.rows.reduce((s, r) => s + (r.cacheReadTokens ?? 0), 0);
@@ -461,6 +811,8 @@ export default function ResultsPage() {
                 ? "Lead Score — Prioritized Results"
                 : isBuyingTrigger
                 ? "Buying Triggers — Heat-Ranked Results"
+                : jobData.type === "multi_channel"
+                ? "Multi-Channel — Ranked Contact Channels"
                 : `${typeLabel} Enrichment — Results`}
             </h1>
             <div className="flex items-center gap-2 mt-0.5">
@@ -526,6 +878,66 @@ export default function ResultsPage() {
           </a>
         </div>
       </div>
+
+      {/* Coverage summary — multi_channel only */}
+      {jobData.type === "multi_channel" && doneCount > 0 && (() => {
+        const cov = computeChannelCoverage(jobData.rows);
+        const actionablePct = cov.rowsWithChannels > 0
+          ? Math.round((cov.actionableToday / cov.rowsWithChannels) * 100)
+          : 0;
+        const topTypes = [...cov.topTypeCounts.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3);
+        return (
+          <div className="bg-brand-50/40 border-b border-cloudy/20 px-8 py-3 flex items-center gap-6 flex-wrap text-xs">
+            <div>
+              <span className="text-cloudy mr-1.5">Channels found:</span>
+              <span className="font-semibold text-gray-900 tabular-nums">
+                {cov.totalChannels}
+              </span>
+              <span className="text-cloudy ml-1">
+                ({cov.avgPerRow.toFixed(1)}/row)
+              </span>
+            </div>
+            <div>
+              <span className="text-cloudy mr-1.5">Rows with a channel:</span>
+              <span className="font-semibold text-gray-900 tabular-nums">
+                {cov.rowsWithChannels}/{doneCount}
+              </span>
+            </div>
+            <div>
+              <span className="text-cloudy mr-1.5">Actionable today:</span>
+              <span className={clsx(
+                "inline-flex items-center px-1.5 py-0.5 rounded font-semibold tabular-nums",
+                actionablePct >= 70 ? "bg-emerald-100 text-emerald-700"
+                : actionablePct >= 40 ? "bg-blue-100 text-blue-700"
+                : "bg-amber-100 text-amber-800"
+              )}>
+                {actionablePct}%
+              </span>
+              <span className="text-cloudy ml-1">
+                (top channel is OK or Manual)
+              </span>
+            </div>
+            {topTypes.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-cloudy">Top channel mix:</span>
+                {topTypes.map(([t, n]) => (
+                  <span
+                    key={t}
+                    className="inline-flex items-center gap-1 bg-white border border-cloudy/30 rounded px-1.5 py-0.5"
+                  >
+                    <span className="text-gray-900 font-medium">
+                      {CHANNEL_TYPE_LABEL[t] ?? t}
+                    </span>
+                    <span className="text-cloudy tabular-nums">· {n}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Toolbar */}
       <div className="bg-white border-b border-cloudy/20 px-8 py-3 flex-shrink-0 flex items-center gap-3">

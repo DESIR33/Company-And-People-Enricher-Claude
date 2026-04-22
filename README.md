@@ -65,6 +65,77 @@ the angle and first line lean toward your offer without turning into a pitch.
 
 ---
 
+## Multi-Channel — reach local businesses where they actually answer
+
+**Multi-Channel** (`/enrich/multi_channel`) is built for **cold outreach to
+local business owners** (plumbers, dentists, salons, barbers, contractors,
+restaurants, boutiques) — the segment where email is the *worst* channel.
+Owners live on their phone; they reply to Instagram DMs in hours and let
+`info@` inboxes rot for weeks.
+
+Given a business name (and optionally a city for disambiguation), the agent:
+
+1. **Resolves the business** (Google Maps + website + socials).
+2. **Identifies the owner / decision maker** from LinkedIn, Google Business
+   Profile review replies, Facebook page transparency, website About pages,
+   or local news. Returns owner name, title, ID confidence (High/Medium/Low),
+   and the evidence behind the call.
+3. **Enumerates every reachable contact channel** from a configurable set of 10:
+   `business_phone_call`, `sms_mobile`, `whatsapp`, `instagram_dm`,
+   `facebook_messenger`, `tiktok_dm`, `youtube`, `nextdoor`,
+   `yelp_angi_thumbtack`, `email`.
+4. **Also discovers owner-personal channels** (optional, on by default) — the
+   owner's personal IG / TikTok / mobile, which typically out-respond the
+   business account 5×. Only surfaces personal channels the agent can tie to
+   the business with concrete evidence (named in bio, tagged in posts, etc.).
+5. **Scores, labels, and ranks each channel** with a deterministic
+   post-processor so rankings are trustworthy regardless of agent drift:
+   - `reachability_score` (0–100) from channel-type baseline + recency
+     bonus + responsiveness signals + owner-personal bonus − compliance penalty
+     − stale penalty.
+   - `compliance_label`: `ok` / `ok_manual_only` / `requires_consent` /
+     `restricted_by_region` / `do_not_use`. These are **advisory labels the
+     agent reasons about, not enforced scrubs** — you are responsible for TCPA
+     (SMS), Meta ToS (IG/FB/WhatsApp DMs), GDPR/CASL, and any DNC lists
+     before sending.
+   - `status`: `likely_active` / `stale` / `unknown`.
+   - Per-channel, channel-appropriate `first_line` — IG casual ≤180 chars,
+     SMS ≤160 no-links, voicemail script ≤20 seconds spoken, email opener
+     without subject.
+6. **Returns a ranked `channels[]` array** (JSON) in `enriched_data`. The CSV
+   download flattens the top 5 channels into columns (`channel_1_type`,
+   `channel_1_value`, `channel_1_score`, `channel_1_compliance`,
+   `channel_1_first_line`, …) and preserves the full array in
+   `channels_json` for advanced consumers.
+
+> **Google Business Profile messaging is dead.** Google permanently removed
+> chat and call history from GBP on **2024-07-31**. The GBP URL is still useful
+> as an identifier and trust signal — it is captured as
+> `google_business_profile_url` — but it is *not* included in the ranked
+> messaging-channel list.
+
+**Workflow helpers built into the multi-channel flow:**
+
+- **Separate city column.** Keep your CSV tidy — if you have business name in
+  one column and city in another, point the enricher at both and it will
+  disambiguate common names automatically (no more `"Joe's Pizza, Atlanta GA"`
+  mashed into a single field). Also available on the Decision Maker flow.
+- **Suppression list.** Paste handles / phones / emails / profile URLs you've
+  already contacted, one per line. Any matching channel gets force-demoted to
+  `do_not_use` and drops to the bottom of the rank — turns the tool into a
+  repeatable weekly workflow instead of a one-shot. US phone numbers match
+  regardless of `+1 / (404) 555-1234 / 4045551234` formatting.
+- **Current local time per row.** Every row captures a `business_timezone`
+  (IANA) and `business_hours_local` — the results table renders a live clock
+  in the business's timezone plus a "Likely open / Likely closed" badge so you
+  don't cold-call a plumber at midnight. The clock auto-ticks every minute.
+- **One-click outreach actions.** Each channel card has Copy value, Copy first
+  line, and Open-in-platform buttons (direct `tel:` / `sms:` / `wa.me` /
+  `mailto:` / Instagram / TikTok links). Click "Show all + actions" on any
+  row to expand every ranked channel with its opener rendered inline.
+
+---
+
 ## Social Engager — LinkedIn engagement monitors
 
 In addition to CSV enrichment, the app ships a **Social Engager** module

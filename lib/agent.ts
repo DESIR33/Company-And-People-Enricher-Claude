@@ -1,17 +1,20 @@
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
-import { getFields, type FieldDefinition } from "./enrichment-fields";
+import { getFields, type EnrichmentType, type FieldDefinition } from "./enrichment-fields";
 import type { ScoreRubric } from "./job-store";
+import type { ChannelType } from "./channels/types";
 
 export type CustomFieldDef = { name: string; description: string };
 
 type AgentEnrichParams = {
-  type: "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
+  type: EnrichmentType;
   identifier: string;
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
   outreachContext?: string;
   scoreRubric?: ScoreRubric;
+  channelTypes?: ChannelType[];
+  includeOwnerPersonal?: boolean;
   model?: string;
   signal?: AbortSignal;
 };
@@ -295,6 +298,120 @@ Scoring + outreach fields (trigger_count, strongest_trigger, trigger_summary, he
     return { systemPrompt, userPrompt };
   }
 
+  if (params.type === "multi_channel") {
+    const requestedChannels = params.channelTypes && params.channelTypes.length > 0
+      ? params.channelTypes
+      : ([
+          "business_phone_call",
+          "sms_mobile",
+          "whatsapp",
+          "instagram_dm",
+          "facebook_messenger",
+          "tiktok_dm",
+          "youtube",
+          "nextdoor",
+          "yelp_angi_thumbtack",
+          "email",
+        ] as const);
+    const includeOwnerPersonal = params.includeOwnerPersonal !== false;
+    const outreach = params.outreachContext?.trim();
+
+    const systemPrompt = `You are a contact-channel researcher for cold outreach to LOCAL BUSINESSES (restaurants, dentists, plumbers, salons, barbers, contractors, boutiques, etc.). Local business owners live on their phone and respond on social/SMS faster than email. Your job: for a single business, identify the owner / decision maker and enumerate every reachable contact channel with a honest reachability score, a compliance label, and a channel-appropriate first-line opener.
+
+FIELDS TO FIND:
+${fieldsSection}
+
+CHANNEL DISCOVERY PLAYBOOK — work through these sources in order:
+1. RESOLVE THE BUSINESS. Input is a business name (possibly with city). Search '"[name]" [city if given]' and confirm with Google Maps + website. If ambiguous and no city is given, pick the business with the strongest web footprint.
+2. PRIMARY SURFACES — fetch and read:
+   - Business website: footer, /contact, /about, /team, /book.
+   - Google Business Profile (Google Maps place page) — capture the GBP URL, phone, hours. Note: GBP chat was removed 2024-07-31, so do NOT list GBP as a messaging channel.
+   - Facebook business page /about, /info tabs.
+   - Instagram bio (look for "DM for quote" / "text us" / wa.me link / linktree).
+   - Yelp / Angi / Thumbtack / Nextdoor profile if discoverable.
+   - Also capture business_timezone as a valid IANA identifier (e.g. "America/New_York", "Europe/London", "America/Los_Angeles") inferred from the business's city / address — the UI shows the user the business's CURRENT local time so they don't call at 11pm. Also capture business_hours_local as a one-line human string (e.g. "Mon-Fri 8am-6pm; Sat 9am-3pm; closed Sun") from Google Business Profile or the website footer. Use "NA" for either if unknown.
+3. OWNER IDENTIFICATION — try in order, stop on confident match:
+   a. LinkedIn: 'site:linkedin.com/in "[business]" (owner OR founder OR "general manager")'.
+   b. Google Business Profile review responses ("Hi from [Name], owner").
+   c. Facebook page transparency / About / named admin.
+   d. Website /about or /team page.
+   e. Secretary of State business filings / domain WHOIS.
+   If you cannot identify with reasonable confidence, set owner_name='NA' and owner_confidence='Low' — do NOT invent.
+${includeOwnerPersonal ? `4. OWNER-PERSONAL CHANNELS (high value — owners respond to personal accounts 5× faster than business accounts):
+   - Check the business IG/FB bio for links to the owner's personal handle.
+   - Search the owner's full name + city on Instagram, TikTok, Facebook.
+   - Only list an owner-personal channel if you have concrete linking evidence (named in bio, tagged in posts, same profile photo, etc.). Speculation is worse than a missing channel.
+` : `4. OWNER-PERSONAL CHANNELS are disabled for this job — only list business-scoped channels.
+`}
+CHANNELS TO ENUMERATE (only these types, omit channels you cannot verify):
+${requestedChannels.map((c) => `- ${c}`).join("\n")}
+
+COMPLIANCE RULE TABLE (use these exact labels):
+- business_phone_call: "ok" in most jurisdictions, but "restricted_by_region" if the inferred country is GDPR/CASL and no prior consent. Note quiet-hours 8am-9pm local time.
+- sms_mobile: ALWAYS "requires_consent" in the US (TCPA prior-express-written-consent required; $500-$1,500/msg fine). Only set to "ok" if the business has a public "text us" CTA on their own website or IG bio — that's treated as implied consent for inquiries.
+- whatsapp: "requires_consent" for first outreach to a US/EU business (Meta requires pre-approved template). "ok_manual_only" if the business advertises a wa.me link publicly.
+- instagram_dm: "ok_manual_only" (Meta ToS prohibits automated DMs to non-engagers; manual sending from your own account is fine).
+- facebook_messenger: "ok_manual_only" same rule as IG. Set "ok" if the page shows a response-time badge and an explicit "Message us" CTA.
+- tiktok_dm: "ok_manual_only".
+- email: "ok" for public business emails in the US under CAN-SPAM (with opt-out in the message). "restricted_by_region" if the inferred country is EU/UK/Canada without existing relationship.
+- youtube / nextdoor / yelp_angi_thumbtack: "ok_manual_only" unless the platform's own messaging UI is opened (e.g. Thumbtack quote request).
+- Set "do_not_use" if the website banner says "no solicitations", the owner publicly asks not to be contacted, or the number is clearly a fax/IVR dead-end.
+
+STATUS RULES (agent heuristic):
+- "likely_active" = evidence of activity in the last 30 days (a post, a review reply, a listed hours update).
+- "stale" = no activity in 90+ days OR the handle/page 404s.
+- "unknown" = no activity information available.
+
+FIRST-LINE RULES (one per channel, channel-appropriate):
+- instagram_dm / tiktok_dm: casual, ≤180 chars, emojis ok, reference a recent post by name.
+- sms_mobile: ≤160 chars, no links (carrier filtering), identify yourself, ask permission.
+- facebook_messenger / whatsapp: ≤180 chars, reference the business, no pitch.
+- business_phone_call: a one-sentence VOICEMAIL script ≤20 seconds spoken (≈45 words).
+- email: open with a specific hook (review, recent post, new location). Do NOT include a subject line — just the opener.
+- yelp_angi_thumbtack / nextdoor / youtube: casual, platform-appropriate, reference the listing.
+${outreach ? `- The sender's outreach angle is: "${outreach}". Weave a light, relevant connection into each first_line WITHOUT pitching.` : ""}
+- If nothing concrete was found for a channel, first_line = "NA" for that channel.
+
+REACHABILITY SCORE GUIDANCE (the post-processor will recompute this deterministically, but your score should roughly match so we can audit you):
+- Start from channel-type baseline: sms_mobile 30, instagram_dm 26, whatsapp 25, tiktok_dm 22, facebook_messenger 20, business_phone_call 18, yelp_angi_thumbtack 16, nextdoor 15, email 10, youtube 8.
+- +20 if posted / active in the last 7 days (+10 if in last 2-4 weeks).
+- +6 per concrete responsiveness signal (bio CTA like "DM for quote", fast-response badge, recent review reply).
+- +15 if scope = "owner_personal" on a channel type that supports it.
+- -25 if status = "stale".
+- -40 if compliance_label = "requires_consent" or "restricted_by_region".
+- -80 if compliance_label = "do_not_use".
+
+HONESTY RULES:
+- NEVER invent a handle, phone, or wa.me link. A fabricated channel is worse than a missing one — the SDR will waste a day on a dead end.
+- If you find a channel but cannot verify it is tied to THIS business (e.g. generic "@plumbers" handle), mark status="unknown" and lower reachability_score.
+- Use "NA" for business_* / owner_* fields you cannot verify. Use "" for optional channel fields like url and last_activity_hint if unknown.
+- Omit channel objects entirely for types you could not find — do NOT emit empty placeholder objects.
+
+OUTPUT FORMAT:
+Respond with ONLY a valid JSON object, no markdown, no prose, no code fences. The "channels" key MUST be an array (even if empty) of objects with this exact shape:
+{
+  "type": "<one of: ${requestedChannels.join(" | ")}>",
+  "scope": "business" | "owner_personal",
+  "value": "<handle, phone in E.164 when possible, email, or URL>",
+  "url": "<canonical URL for this channel, if different from value>",
+  "status": "likely_active" | "stale" | "unknown",
+  "last_activity_hint": "<short human string like 'posted 2 days ago' or ''>",
+  "reachability_score": <integer 0-100>,
+  "responsiveness_signals": ["<short phrase>", ...],
+  "compliance_label": "ok" | "ok_manual_only" | "requires_consent" | "restricted_by_region" | "do_not_use",
+  "compliance_note": "<one sentence explaining the label>",
+  "first_line": "<channel-appropriate opener or 'NA'>",
+  "rank_rationale": "<one sentence explaining why this channel is / is not likely best today>"
+}
+
+{
+  ${allKeys}
+}`;
+    const userPrompt = `BUSINESS IDENTIFIER: ${params.identifier}
+(Local business name — possibly with a city. Identify the owner and enumerate every reachable contact channel from the list above, with compliance labels and channel-appropriate first lines.)`;
+    return { systemPrompt, userPrompt };
+  }
+
   if (params.type === "company") {
     const systemPrompt = `You are a company research specialist. Find specific information about a company.
 
@@ -390,6 +507,11 @@ function normalizeFields(
     const val = parsed[key];
     if (val === null || val === undefined) {
       result[key] = "";
+    } else if (Array.isArray(val) || (typeof val === "object" && val !== null)) {
+      // Structured fields (e.g. "channels") are preserved as JSON text so the
+      // downstream pipeline can parse + re-validate them. Passing them through
+      // String() would produce "[object Object]".
+      result[key] = JSON.stringify(val);
     } else {
       let str = String(val);
       if (key === "description" && str.length > 500) {
@@ -467,6 +589,7 @@ export async function enrichWithAgent(
           systemPrompt: [systemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY],
           allowedTools: ["WebSearch", "WebFetch"],
           maxTurns:
+            params.type === "multi_channel" ? 22 :
             params.type === "decision_maker" ? 20 :
             params.type === "lead_score"     ? 18 :
             params.type === "buying_trigger" ? 18 :
