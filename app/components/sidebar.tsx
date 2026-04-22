@@ -2,13 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, Users, UserSearch, Sparkles } from "lucide-react";
+import { Building2, Users, UserSearch, Sparkles, Radar, Gauge } from "lucide-react";
 import { clsx } from "clsx";
 
 const NAV = [
   { href: "/enrich/company",         label: "Companies",       icon: Building2,  description: "Enrich by URL" },
   { href: "/enrich/people",          label: "People",          icon: Users,      description: "Enrich by LinkedIn" },
   { href: "/enrich/decision_maker",  label: "Decision Makers", icon: UserSearch, description: "Find by business name" },
+  { href: "/monitors",               label: "Social Engager",  icon: Radar,      description: "Track LinkedIn engagement" },
+  { href: "/usage",                  label: "Usage",           icon: Gauge,      description: "Monthly caps" },
 ];
 
 export function Sidebar() {
