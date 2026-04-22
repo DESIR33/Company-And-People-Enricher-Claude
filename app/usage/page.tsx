@@ -43,16 +43,16 @@ export default function UsagePage() {
 
   return (
     <div className="min-h-screen pb-16">
-      <div className="max-w-5xl mx-auto px-6 pt-6 space-y-6">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-4 sm:pt-6 space-y-4 sm:space-y-6">
         <div>
           <div className="flex items-center gap-2">
-            <Gauge className="w-5 h-5 text-brand-500" strokeWidth={2} />
-            <h1 className="text-3xl font-serif font-bold text-gray-900 tracking-tight">Usage</h1>
+            <Gauge className="w-5 h-5 text-brand-500 flex-shrink-0" strokeWidth={2} />
+            <h1 className="text-2xl sm:text-3xl font-serif font-bold text-gray-900 tracking-tight">Usage</h1>
           </div>
           <p className="text-sm text-cloudy mt-1">
             Monthly lead count and cost — across every Social Engager monitor. Caps are set via{" "}
-            <code className="text-[11px] bg-pampas px-1 py-0.5 rounded">MONITOR_MONTHLY_LEAD_CAP</code> and{" "}
-            <code className="text-[11px] bg-pampas px-1 py-0.5 rounded">MONITOR_MONTHLY_COST_CAP</code>.
+            <code className="text-[11px] bg-pampas px-1 py-0.5 rounded break-all">MONITOR_MONTHLY_LEAD_CAP</code> and{" "}
+            <code className="text-[11px] bg-pampas px-1 py-0.5 rounded break-all">MONITOR_MONTHLY_COST_CAP</code>.
           </p>
         </div>
 
@@ -107,6 +107,7 @@ export default function UsagePage() {
                     No recorded usage yet.
                   </div>
                 ) : (
+                  <div className="overflow-x-auto">
                   <table className="min-w-full text-xs">
                     <thead>
                       <tr className="bg-pampas/60 text-left text-[10px] uppercase tracking-wider text-cloudy">
@@ -125,6 +126,7 @@ export default function UsagePage() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 )}
               </div>
             </section>

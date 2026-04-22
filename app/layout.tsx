@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Lora, DM_Sans } from "next/font/google";
 import "./globals.css";
 import { MeshBackground } from "@/app/components/mesh-background";
@@ -21,6 +21,12 @@ export const metadata: Metadata = {
   description: "Enrich company and people data with Claude AI",
 };
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -28,7 +34,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${lora.variable} ${dmSans.variable} h-full`}>
-      <body className="min-h-full">
+      <body className="min-h-full overflow-x-hidden">
         <MeshBackground />
         <MonitorNav />
         {children}

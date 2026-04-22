@@ -9,16 +9,27 @@ export function MeshBackground() {
 
   useEffect(() => {
     setMounted(true);
-    const update = () => setDimensions({ width: window.innerWidth, height: window.innerHeight });
+    // Use documentElement so we pick up the layout viewport, not the visual
+    // viewport — otherwise iOS Safari shrinks the shader when the URL bar
+    // hides/shows and the user sees a seam at the bottom of the screen.
+    const update = () =>
+      setDimensions({
+        width: document.documentElement.clientWidth || window.innerWidth,
+        height: document.documentElement.clientHeight || window.innerHeight,
+      });
     update();
     window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
+    window.addEventListener("orientationchange", update);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("orientationchange", update);
+    };
   }, []);
 
   if (!mounted) return null;
 
   return (
-    <div className="fixed inset-0 -z-10 w-screen h-screen">
+    <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
       <MeshGradient
         width={dimensions.width}
         height={dimensions.height}

@@ -800,13 +800,13 @@ export default function ResultsPage() {
       )}
 
       {/* Header */}
-      <div className="bg-white border-b border-cloudy/20 px-8 py-5 flex-shrink-0 flex items-center justify-between gap-4">
+      <div className="bg-white border-b border-cloudy/20 px-4 sm:px-8 py-3 sm:py-5 flex-shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-8 h-8 rounded-lg bg-brand-50 flex items-center justify-center flex-shrink-0">
             <TypeIcon className="w-4 h-4 text-brand-500" strokeWidth={2} />
           </div>
-          <div className="min-w-0">
-            <h1 className="text-base font-semibold text-gray-900">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-sm sm:text-base font-semibold text-gray-900 truncate">
               {isLeadScore
                 ? "Lead Score — Prioritized Results"
                 : isBuyingTrigger
@@ -815,7 +815,7 @@ export default function ResultsPage() {
                 ? "Multi-Channel — Ranked Contact Channels"
                 : `${typeLabel} Enrichment — Results`}
             </h1>
-            <div className="flex items-center gap-2 mt-0.5">
+            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
               {isComplete ? (
                 <>
                   {jobData.status === "cancelled" && <span className="text-xs text-cloudy font-medium">Cancelled</span>}
@@ -844,12 +844,12 @@ export default function ResultsPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
           {isRunning && (
             <button
               onClick={handleCancel}
               disabled={cancelling}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-gray-600 bg-white border border-cloudy/30 hover:bg-pampas transition-all duration-150 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium text-gray-600 bg-white border border-cloudy/30 hover:bg-pampas transition-all duration-150 disabled:opacity-50"
             >
               {cancelling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <StopCircle className="w-3.5 h-3.5" strokeWidth={2} />}
               Cancel
@@ -858,23 +858,25 @@ export default function ResultsPage() {
           {!isRunning && (
             <button
               onClick={() => router.push(`/enrich/${jobData.type}`)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-gray-600 bg-white border border-cloudy/30 hover:bg-pampas transition-all duration-150"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium text-gray-600 bg-white border border-cloudy/30 hover:bg-pampas transition-all duration-150"
             >
-              ← New enrichment
+              <span className="sm:hidden">← New</span>
+              <span className="hidden sm:inline">← New enrichment</span>
             </button>
           )}
           <a
             href={`/api/download/${jobId}`}
             download
             className={clsx(
-              "inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-150",
+              "inline-flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-150",
               isComplete && doneCount > 0
                 ? "bg-brand-500 text-white hover:bg-brand-600 shadow-sm"
                 : "bg-cloudy/20 text-cloudy pointer-events-none"
             )}
           >
             <Download className="w-3.5 h-3.5" strokeWidth={2} />
-            Download CSV
+            <span className="sm:hidden">CSV</span>
+            <span className="hidden sm:inline">Download CSV</span>
           </a>
         </div>
       </div>
@@ -889,7 +891,7 @@ export default function ResultsPage() {
           .sort((a, b) => b[1] - a[1])
           .slice(0, 3);
         return (
-          <div className="bg-brand-50/40 border-b border-cloudy/20 px-8 py-3 flex items-center gap-6 flex-wrap text-xs">
+          <div className="bg-brand-50/40 border-b border-cloudy/20 px-4 sm:px-8 py-3 flex items-center gap-4 sm:gap-6 flex-wrap text-xs">
             <div>
               <span className="text-cloudy mr-1.5">Channels found:</span>
               <span className="font-semibold text-gray-900 tabular-nums">
@@ -940,14 +942,14 @@ export default function ResultsPage() {
       })()}
 
       {/* Toolbar */}
-      <div className="bg-white border-b border-cloudy/20 px-8 py-3 flex-shrink-0 flex items-center gap-3">
-        <div className="relative">
+      <div className="bg-white border-b border-cloudy/20 px-4 sm:px-8 py-3 flex-shrink-0 flex items-center gap-2 sm:gap-3 flex-wrap">
+        <div className="relative flex-1 sm:flex-none min-w-0">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-cloudy" strokeWidth={2} />
           <input
             value={globalFilter}
             onChange={(e) => setGlobalFilter(e.target.value)}
             placeholder="Filter rows…"
-            className="bg-pampas border border-cloudy/30 rounded-lg pl-8 pr-3 py-1.5 text-sm text-gray-900 placeholder:text-cloudy focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent w-56 transition"
+            className="bg-pampas border border-cloudy/30 rounded-lg pl-8 pr-3 py-1.5 text-sm text-gray-900 placeholder:text-cloudy focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent w-full sm:w-56 transition"
           />
         </div>
 
