@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
-import { LayoutGrid, Gauge, Building2, Users, UserSearch, Radar, Target } from "lucide-react";
+import { LayoutGrid, Gauge, Building2, Users, UserSearch, Radar, Target, Flame } from "lucide-react";
 
 const LINKS = [
   { href: "/enrich/company",        label: "Company",        icon: Building2 },
   { href: "/enrich/people",         label: "People",         icon: Users },
   { href: "/enrich/decision_maker", label: "Decision Maker", icon: UserSearch },
   { href: "/enrich/lead_score",     label: "Lead Score",     icon: Target },
+  { href: "/enrich/buying_trigger", label: "Buying Triggers", icon: Flame },
   { href: "/monitors",              label: "Social Engager", icon: Radar },
   { href: "/usage",                 label: "Usage",          icon: Gauge },
 ];

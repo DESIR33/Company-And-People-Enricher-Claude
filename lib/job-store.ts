@@ -24,7 +24,7 @@ export type EnrichmentRow = {
 
 export type Job = {
   id: string;
-  type: "company" | "people" | "decision_maker" | "lead_score";
+  type: "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
   status: "pending" | "processing" | "completed" | "failed" | "cancelled";
   createdAt: number;
   updatedAt: number;
@@ -116,7 +116,7 @@ function jobFromDb(meta: JobMetaRow, rows: JobRowRow[]): Job {
 }
 
 export function createJob(params: {
-  type: "company" | "people" | "decision_maker" | "lead_score";
+  type: "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
   identifierColumn: string;
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];

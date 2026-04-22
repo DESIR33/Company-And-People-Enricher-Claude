@@ -40,6 +40,29 @@ Upload a CSV, pick what fields you want enriched, and the agent does the researc
 - **Personalized first line** — a one-sentence opener grounded in their role, tenure, and recent activity. Same optional outreach-context field as on the company side.
 - Any custom fields you define
 
+**Buying Triggers** (`/enrich/buying_trigger`) detects fresh signals that a company
+is in-market *right now* and hands you the outreach copy to act on them:
+
+- **Trigger signals** (configurable which ones to hunt for) — marketing-role hire,
+  sales-role hire, active Google/Meta ads in the last 30 days, "too busy" /
+  capacity complaint posts on Facebook / LinkedIn, new location or expansion,
+  recent funding round, new CMO / VP Marketing / Head of Growth, product launch
+  or rebrand. Each signal comes back with a dated quote and a source URL — or
+  `NA` if nothing was found.
+- **Heat rollup** — Trigger Count, Strongest Trigger, one-line Trigger Summary,
+  Heat Score (0–100), Heat Tier (A/B/C/D), and a Recommended Action (*Reach out
+  today* / *Reach out this week* / *Nurture* / *Skip*). The results table
+  auto-sorts by Heat Score so your top 50 bubbles to the top.
+- **Outreach payload** — an **Outreach Angle** (one sentence on how to
+  position your pitch given the strongest trigger) and a **Personalized First
+  Line** that references the specific signal (the role they posted, the ad
+  they're running, the Facebook rant, the new location). Both are *always*
+  included — triggers without outreach copy are just data, and this view is
+  built for SDRs who need to send the message today.
+
+The optional **Outreach context** field tells the agent what you're selling so
+the angle and first line lean toward your offer without turning into a pitch.
+
 ---
 
 ## Social Engager — LinkedIn engagement monitors

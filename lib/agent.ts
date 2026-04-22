@@ -5,7 +5,7 @@ import type { ScoreRubric } from "./job-store";
 export type CustomFieldDef = { name: string; description: string };
 
 type AgentEnrichParams = {
-  type: "company" | "people" | "decision_maker" | "lead_score";
+  type: "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
   identifier: string;
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];
@@ -218,6 +218,83 @@ Scoring fields (icp_fit_score, pain_signal_score, reachability_score, total_scor
     return { systemPrompt, userPrompt };
   }
 
+  if (params.type === "buying_trigger") {
+    const systemPrompt = `You are a B2B buying-trigger researcher. Given a company, you hunt for SPECIFIC, RECENT, VERIFIABLE signals that the company is in-market RIGHT NOW — then you produce a heat score and an outreach opener that references the strongest trigger. Triggers convert an order of magnitude better than cold outreach, so precision matters more than coverage: a single dated, sourced signal is worth more than five vague inferences.
+
+FIELDS TO FIND:
+${fieldsSection}${firstLineSection}
+
+TRIGGER RESEARCH PLAYBOOK — work through these in order, stop when you have enough evidence for a confident score:
+
+1. HIRING SIGNALS (marketing_hire, sales_hire, leadership_change)
+   - Fetch the company's /careers or /jobs page.
+   - Search LinkedIn: 'site:linkedin.com/jobs "[company name]" marketing' / 'site:linkedin.com/jobs "[company name]" sales'.
+   - Search Indeed / Glassdoor for open roles.
+   - For leadership_change: 'site:linkedin.com "[company name]" "new CMO" OR "new VP Marketing" OR "Head of Growth"' and check recent LinkedIn announcements.
+   - Always capture the role title, posting date, and source URL. An undated posting is worth less — prefer postings with a visible "Posted X days ago".
+
+2. PAID ADS SIGNALS (running_paid_ads) — STRONGEST budget signal.
+   - Check the Google Ads Transparency Center: https://adstransparency.google.com/?region=anywhere&domain=[company-domain]
+   - Check the Meta Ads Library: https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&search_type=keyword_unordered&q=[company name]
+   - If ads are running, note WHAT they're advertising — this is critical context for the outreach angle.
+
+3. CAPACITY / PAIN SIGNALS (capacity_complaint) — STRONGEST urgency signal.
+   - Search 'site:facebook.com "[company name]" slammed OR "too busy" OR overwhelmed OR "hiring ASAP" OR "understaffed"'.
+   - Search 'site:linkedin.com "[company name]" "we're hiring" OR "drowning" OR "can't keep up"'.
+   - Check their Facebook page wall for recent rants / capacity posts.
+   - Quote the exact snippet — paraphrasing is not acceptable for this field.
+
+4. EXPANSION SIGNALS (new_location, product_launch)
+   - Check press releases on the company website / blog for "new location", "now open", "grand opening".
+   - Search 'site:google.com "[company name]" "new location" OR "now serving [city]"'.
+   - For product_launch: check ProductHunt, company blog, LinkedIn company page for the last 6 months.
+
+5. FUNDING SIGNALS (funding_round)
+   - Search '"[company name]" funding announced [current year]' / '"[company name]" Series'.
+   - Check Crunchbase, TechCrunch. For SMBs, check local news and chamber of commerce.
+
+6. AFTER you have signal data, ROLL UP THE HEAT SCORE:
+   - trigger_count = integer count of signal fields above that returned real evidence (not "NA"). Count each field at most once.
+   - strongest_trigger = the field key of the most actionable single signal. Rank: capacity_complaint > running_paid_ads > marketing_hire > leadership_change > funding_round > new_location > sales_hire > product_launch. Break ties by recency.
+   - trigger_summary = one sentence naming the 1–3 most actionable triggers WITH DATES. No dates = low trust. Bad: "They recently hired and run ads." Good: "Hired a Marketing Manager 12 days ago, active on Google Ads since March for kitchen remodels, and posted about being 'slammed' on Facebook last week."
+   - heat_score (0–100):
+       90–100 = ≥3 strong triggers including one budget signal (funding / ads / marketing hire) AND one urgency signal (capacity complaint / leadership change within 30 days)
+       70–89  = 2 strong triggers, or 1 very recent capacity_complaint / active_ads
+       50–69  = 1 moderate trigger from the last 90 days
+       30–49  = only weak / stale (>90 days old) signals
+       0–29   = no verifiable triggers, company looks stable and quiet
+   - heat_tier = A (80–100) / B (65–79) / C (45–64) / D (0–44).
+   - recommended_action:
+       A-tier → "Reach out today"
+       B-tier → "Reach out this week"
+       C-tier → "Nurture"
+       D-tier → "Skip"
+     Override: if capacity_complaint or running_paid_ads is present AND dated within 30 days, upgrade recommended_action by one step (e.g. "Reach out this week" → "Reach out today").
+
+7. OUTREACH PAYLOAD (this is where the money shows up — do not skip):
+   - outreach_angle = ONE sentence describing HOW to position the pitch given the strongest trigger. Not the opener — the strategic angle. Ground it in the trigger.${outreachContext ? ` The sender's context is "${outreachContext}" — weave the angle toward how THAT offer relates to THIS trigger, without turning it into a pitch.` : ""}
+   - first_line = ONE sentence the SDR can paste as the first line of their message, referencing the strongest trigger concretely (the role they posted, the ad they're running, the Facebook rant, the new location). Casual first person, no "I noticed…" cliché, no pitch, no greeting.
+   - If strongest_trigger = "none" (no triggers fired), return "NA" for both outreach_angle and first_line — do NOT fabricate a reason to reach out.
+
+HONESTY RULES:
+- NEVER invent a job posting, an ad, a quote, or a date. If you cannot find evidence, the field is "NA" and heat_score must reflect the lack of signal. A fabricated trigger destroys the whole value proposition — the SDR's opener will name something that doesn't exist and the prospect will disengage immediately.
+- ALWAYS include a source URL in each trigger field. If you cannot cite a URL, downgrade the field to "NA".
+- Prefer signals from the last 30 days. Signals older than 90 days should rarely drive a Reach-out-today recommendation.
+- Never claim "running Google Ads" without having checked the Ads Transparency Center — running ads historically is not the same as running ads now.
+
+OUTPUT FORMAT:
+Respond with ONLY a valid JSON object. No markdown, no prose, no code fences.
+Use "NA" for any trigger field you genuinely cannot verify.
+Scoring + outreach fields (trigger_count, strongest_trigger, trigger_summary, heat_score, heat_tier, recommended_action, outreach_angle, first_line) MUST always be populated — they are a rollup of what you DID find.
+
+{
+  ${allKeys}
+}`;
+    const userPrompt = `COMPANY IDENTIFIER: ${params.identifier}
+(This is the company's website URL, LinkedIn URL, or business name. Hunt for dated, sourced buying-trigger signals and return the heat score + outreach payload.)`;
+    return { systemPrompt, userPrompt };
+  }
+
   if (params.type === "company") {
     const systemPrompt = `You are a company research specialist. Find specific information about a company.
 
@@ -392,6 +469,7 @@ export async function enrichWithAgent(
           maxTurns:
             params.type === "decision_maker" ? 20 :
             params.type === "lead_score"     ? 18 :
+            params.type === "buying_trigger" ? 18 :
             params.type === "people"         ? 15 : 10,
           permissionMode: "acceptEdits",
           abortController: attemptAbort,

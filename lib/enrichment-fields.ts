@@ -341,10 +341,118 @@ export const LEAD_SCORE_FIELD_GROUPS: FieldGroup[] = [
   },
 ];
 
+export const BUYING_TRIGGER_FIELD_GROUPS: FieldGroup[] = [
+  {
+    label: "Company Snapshot",
+    fields: [
+      { key: "industry",     label: "Industry",     description: "Primary industry or sector (e.g. Home Services, SaaS, Boutique Retail, Healthcare)" },
+      { key: "company_size", label: "Company Size", description: "Headcount range (e.g. 1–10, 10–50, 50–200)" },
+      { key: "hq_location",  label: "HQ Location",  description: "City and country of the primary location" },
+      { key: "website_url",  label: "Website URL",  description: "Official company website URL" },
+    ],
+  },
+  {
+    label: "Buying Triggers",
+    fields: [
+      {
+        key: "marketing_hire",
+        label: "Marketing Role Opened",
+        description: "Is the company actively hiring for a marketing role (Marketing Manager, Growth Marketer, Demand Gen, Head of Marketing, CMO, Social Media Manager, etc.) in the last 90 days? Check LinkedIn Jobs, Indeed, their /careers page. If yes, return: '[Role Title] — posted [date] — [source URL]'. Otherwise 'NA'.",
+      },
+      {
+        key: "sales_hire",
+        label: "Sales Role Opened",
+        description: "Is the company actively hiring SDRs / AEs / VP Sales / Head of Sales in the last 90 days? Check LinkedIn Jobs, Indeed, their /careers page. Format: '[Role Title] — posted [date] — [source URL]'. Otherwise 'NA'.",
+      },
+      {
+        key: "running_paid_ads",
+        label: "Running Paid Ads (30d)",
+        description: "Evidence the company is currently running Google Ads or Meta ads in the last 30 days. Check the Google Ads Transparency Center (adstransparency.google.com) and the Meta Ads Library (facebook.com/ads/library). If active, return: '[Platform] — [what they're advertising] — [source URL]'. Otherwise 'NA'. This is a strong buying signal because an active ad spend means they already have budget for growth.",
+      },
+      {
+        key: "capacity_complaint",
+        label: "\"Too Busy\" / Capacity Post",
+        description: "Any recent (last 90 days) public social post on Facebook, LinkedIn, Instagram, or Twitter/X where the owner / founder / an employee complains about being slammed, overwhelmed, understaffed, or turning customers away. This is the strongest buying trigger — they are actively feeling pain. Format: '\"[quoted snippet]\" — [author name] — [date] — [source URL]'. Otherwise 'NA'.",
+      },
+      {
+        key: "new_location",
+        label: "New Location / Expansion",
+        description: "Did the company open a new office, branch, storefront, or expand to a new city / region in the last 6 months? Check their website, press releases, local news, LinkedIn posts. Format: '[New city or location] — announced [date] — [source URL]'. Otherwise 'NA'.",
+      },
+      {
+        key: "funding_round",
+        label: "Recent Funding Round",
+        description: "Did the company close a funding round, grant, or significant investment in the last 12 months? Check Crunchbase, TechCrunch, SEC filings, company blog. Format: '[Amount] [Stage] — closed [date] — [source URL]'. Otherwise 'NA'.",
+      },
+      {
+        key: "leadership_change",
+        label: "New Marketing / Sales Leader",
+        description: "Was a new CMO, VP Marketing, Head of Growth, VP Sales, or RevOps leader hired in the last 6 months? Check LinkedIn announcements, press releases. New leaders reshape budgets in their first 90 days — strong trigger. Format: '[Name] — [Title] — started [date] — [source URL]'. Otherwise 'NA'.",
+      },
+      {
+        key: "product_launch",
+        label: "Product Launch / Rebrand",
+        description: "Major product launch, new service line, or public rebrand in the last 6 months? Check company blog, press, LinkedIn, ProductHunt. Format: '[What was launched] — [date] — [source URL]'. Otherwise 'NA'.",
+      },
+    ],
+  },
+  {
+    label: "Heat Score",
+    fields: [
+      {
+        key: "trigger_count",
+        label: "Triggers Detected",
+        description: "Integer count of how many of the Buying Trigger fields above came back with real evidence (not 'NA'). This is a fact derived from the fields above, not a judgement.",
+      },
+      {
+        key: "strongest_trigger",
+        label: "Strongest Trigger",
+        description: "The single trigger field key that represents the most actionable signal (e.g. 'capacity_complaint', 'running_paid_ads', 'marketing_hire'). Pick the one that most clearly implies budget + urgency. If no triggers fired, return 'none'.",
+      },
+      {
+        key: "trigger_summary",
+        label: "Trigger Summary",
+        description: "One sentence (max ~30 words) a human SDR can read in three seconds that names the 1–3 most actionable triggers with dates. Example: 'Hired a CMO 4 weeks ago, posted a Facebook rant about being slammed 12 days ago, and has been running Google Ads for kitchen remodels since March.'",
+      },
+      {
+        key: "heat_score",
+        label: "Heat Score",
+        description: "Integer 0–100 that reflects how hot this lead is RIGHT NOW based on the triggers detected. Rubric — 90–100: multiple strong, recent triggers including budget + pain (e.g. funding + marketing hire + active ads). 70–89: one strong very recent trigger OR two moderate ones. 50–69: one moderate trigger. 30–49: weak or stale signals only. 0–29: no visible triggers.",
+      },
+      {
+        key: "heat_tier",
+        label: "Heat Tier",
+        description: "Letter tier derived from heat_score: A (80–100) / B (65–79) / C (45–64) / D (0–44). Used to sort and prioritise the list.",
+      },
+      {
+        key: "recommended_action",
+        label: "Recommended Action",
+        description: "ONE of: 'Reach out today' / 'Reach out this week' / 'Nurture' / 'Skip'. Based on heat_tier: A → today, B → this week, C → nurture, D → skip. Bias towards 'Reach out today' when the trigger involves active ads or a capacity complaint within the last 30 days.",
+      },
+    ],
+  },
+  {
+    label: "Outreach",
+    fields: [
+      {
+        key: "outreach_angle",
+        label: "Outreach Angle",
+        description: "One sentence explaining HOW to position your pitch given the strongest trigger. Not the opener — the angle. Example: 'They just hired a Marketing Manager who will need reporting tooling in their first 30 days — lead with time-to-insight and show the Marketing Manager dashboard.' Ground this in the specific trigger you found.",
+      },
+      {
+        key: "first_line",
+        label: "Personalized First Line",
+        description: "One-sentence opener (max ~25 words) to paste as the first line after the greeting. MUST reference the strongest trigger concretely — the role they posted, the ad they're running, the Facebook post they made, the location they opened. Casual first person, no pitch, no 'I noticed…' clichés. If no trigger fired, return 'NA' rather than a generic line.",
+      },
+    ],
+  },
+];
+
 export const COMPANY_FIELDS:         FieldDefinition[] = COMPANY_FIELD_GROUPS.flatMap((g)         => g.fields);
 export const PEOPLE_FIELDS:          FieldDefinition[] = PEOPLE_FIELD_GROUPS.flatMap((g)          => g.fields);
 export const DECISION_MAKER_FIELDS:  FieldDefinition[] = DECISION_MAKER_FIELD_GROUPS.flatMap((g)  => g.fields);
 export const LEAD_SCORE_FIELDS:      FieldDefinition[] = LEAD_SCORE_FIELD_GROUPS.flatMap((g)      => g.fields);
+export const BUYING_TRIGGER_FIELDS:  FieldDefinition[] = BUYING_TRIGGER_FIELD_GROUPS.flatMap((g)  => g.fields);
 
 export const LEAD_SCORE_REQUIRED_FIELDS: string[] = [
   "icp_fit_score",
@@ -358,18 +466,46 @@ export const LEAD_SCORE_REQUIRED_FIELDS: string[] = [
   "score_explanation",
 ];
 
-export type EnrichmentType = "company" | "people" | "decision_maker" | "lead_score";
+// Heat-score + outreach are the whole point of the buying-trigger job — always
+// produce them so the results table can sort and the SDR has an opener.
+export const BUYING_TRIGGER_REQUIRED_FIELDS: string[] = [
+  "trigger_count",
+  "strongest_trigger",
+  "trigger_summary",
+  "heat_score",
+  "heat_tier",
+  "recommended_action",
+  "outreach_angle",
+  "first_line",
+];
+
+// The trigger-signal field keys in canonical order. Used by the scoring
+// reconciler to count how many triggers actually fired.
+export const BUYING_TRIGGER_SIGNAL_FIELDS: string[] = [
+  "marketing_hire",
+  "sales_hire",
+  "running_paid_ads",
+  "capacity_complaint",
+  "new_location",
+  "funding_round",
+  "leadership_change",
+  "product_launch",
+];
+
+export type EnrichmentType = "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
 
 export function getFields(type: EnrichmentType): FieldDefinition[] {
-  if (type === "company")        return COMPANY_FIELDS;
-  if (type === "people")         return PEOPLE_FIELDS;
-  if (type === "decision_maker") return DECISION_MAKER_FIELDS;
-  return LEAD_SCORE_FIELDS;
+  if (type === "company")         return COMPANY_FIELDS;
+  if (type === "people")          return PEOPLE_FIELDS;
+  if (type === "decision_maker")  return DECISION_MAKER_FIELDS;
+  if (type === "lead_score")      return LEAD_SCORE_FIELDS;
+  return BUYING_TRIGGER_FIELDS;
 }
 
 export function getFieldGroups(type: EnrichmentType): FieldGroup[] {
-  if (type === "company")        return COMPANY_FIELD_GROUPS;
-  if (type === "people")         return PEOPLE_FIELD_GROUPS;
-  if (type === "decision_maker") return DECISION_MAKER_FIELD_GROUPS;
-  return LEAD_SCORE_FIELD_GROUPS;
+  if (type === "company")         return COMPANY_FIELD_GROUPS;
+  if (type === "people")          return PEOPLE_FIELD_GROUPS;
+  if (type === "decision_maker")  return DECISION_MAKER_FIELD_GROUPS;
+  if (type === "lead_score")      return LEAD_SCORE_FIELD_GROUPS;
+  return BUYING_TRIGGER_FIELD_GROUPS;
 }

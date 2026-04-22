@@ -25,6 +25,7 @@ import {
   Users,
   UserSearch,
   Target,
+  Flame,
   StopCircle,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -45,7 +46,7 @@ type JobRow = {
 
 type JobData = {
   jobId: string;
-  type: "company" | "people" | "decision_maker" | "lead_score";
+  type: "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
   status: "pending" | "processing" | "completed" | "failed" | "cancelled";
   totalRows: number;
   processedRows: number;
@@ -195,7 +196,10 @@ export default function ResultsPage() {
     }
   }, [jobData, jobId, cancelling]);
 
-  const isLeadScore = jobData?.type === "lead_score";
+  const isLeadScore     = jobData?.type === "lead_score";
+  const isBuyingTrigger = jobData?.type === "buying_trigger";
+  const isPrioritized   = isLeadScore || isBuyingTrigger;
+  const sortScoreKey    = isBuyingTrigger ? "heat_score" : "total_score";
 
   const tableData = useMemo(() => {
     if (!jobData) return [];
@@ -208,10 +212,10 @@ export default function ResultsPage() {
       ...row.enrichedData,
     }));
 
-    if (isLeadScore) {
+    if (isPrioritized) {
       const scoreOf = (r: Record<string, string>) => {
         if (r._status !== "done") return -1;
-        const n = Number(r.total_score);
+        const n = Number(r[sortScoreKey]);
         return Number.isFinite(n) ? n : -1;
       };
       rows.sort((a, b) => scoreOf(b) - scoreOf(a));
@@ -221,7 +225,7 @@ export default function ResultsPage() {
       if (showTopOnly) return rows.slice(0, TOP_N);
     }
     return rows;
-  }, [jobData, isLeadScore, showTopOnly]);
+  }, [jobData, isPrioritized, sortScoreKey, showTopOnly]);
 
 
   const columns = useMemo<ColumnDef<Record<string, string>>[]>(() => {
@@ -261,7 +265,9 @@ export default function ResultsPage() {
       },
     }));
 
-    const SCORE_FIELDS = new Set(["icp_fit_score", "pain_signal_score", "reachability_score", "total_score"]);
+    const SCORE_FIELDS = new Set(["icp_fit_score", "pain_signal_score", "reachability_score", "total_score", "heat_score"]);
+    const HEADLINE_SCORE_FIELDS = new Set(["total_score", "heat_score"]);
+    const TIER_FIELDS = new Set(["priority_tier", "heat_tier"]);
 
     const enrichedCols: ColumnDef<Record<string, string>>[] = jobData.requestedFields.map((key) => ({
       id: `e_${key}`,
@@ -278,7 +284,7 @@ export default function ResultsPage() {
           const num = Number(v);
           if (Number.isFinite(num)) {
             const color =
-              key === "total_score"
+              HEADLINE_SCORE_FIELDS.has(key)
                 ? num >= 80 ? "bg-emerald-100 text-emerald-700"
                 : num >= 65 ? "bg-blue-100 text-blue-700"
                 : num >= 45 ? "bg-amber-100 text-amber-700"
@@ -295,7 +301,7 @@ export default function ResultsPage() {
           }
         }
 
-        if (key === "priority_tier" && v) {
+        if (TIER_FIELDS.has(key) && v) {
           return (
             <span className={clsx(
               "inline-flex items-center justify-center w-6 h-6 rounded-md text-[11px] font-bold",
@@ -374,9 +380,9 @@ export default function ResultsPage() {
       },
     };
 
-    const leadCols = isLeadScore ? [rankCol] : [];
+    const leadCols = isPrioritized ? [rankCol] : [];
     return [statusCol, ...leadCols, ...originalCols, ...enrichedCols, costCol, retryCol];
-  }, [jobData, retryingRows, retryModel, handleRetry, isLeadScore]);
+  }, [jobData, retryingRows, retryModel, handleRetry, isPrioritized]);
 
   const table = useReactTable({
     data: tableData, columns,
@@ -415,14 +421,16 @@ export default function ResultsPage() {
   const doneCount  = jobData.rows.filter((r) => r.status === "done").length;
   const errorCount = jobData.rows.filter((r) => r.status === "error").length;
   const TypeIcon   =
-    jobData.type === "company"        ? Building2
-    : jobData.type === "people"       ? Users
-    : jobData.type === "lead_score"   ? Target
+    jobData.type === "company"          ? Building2
+    : jobData.type === "people"         ? Users
+    : jobData.type === "lead_score"     ? Target
+    : jobData.type === "buying_trigger" ? Flame
     : UserSearch;
   const typeLabel  =
-    jobData.type === "company"        ? "Company"
-    : jobData.type === "people"       ? "People"
-    : jobData.type === "lead_score"   ? "Lead Score"
+    jobData.type === "company"          ? "Company"
+    : jobData.type === "people"         ? "People"
+    : jobData.type === "lead_score"     ? "Lead Score"
+    : jobData.type === "buying_trigger" ? "Buying Triggers"
     : "Decision Maker";
 
   const cacheReadTotal     = jobData.rows.reduce((s, r) => s + (r.cacheReadTokens ?? 0), 0);
@@ -449,7 +457,11 @@ export default function ResultsPage() {
           </div>
           <div className="min-w-0">
             <h1 className="text-base font-semibold text-gray-900">
-              {isLeadScore ? "Lead Score — Prioritized Results" : `${typeLabel} Enrichment — Results`}
+              {isLeadScore
+                ? "Lead Score — Prioritized Results"
+                : isBuyingTrigger
+                ? "Buying Triggers — Heat-Ranked Results"
+                : `${typeLabel} Enrichment — Results`}
             </h1>
             <div className="flex items-center gap-2 mt-0.5">
               {isComplete ? (
@@ -527,7 +539,7 @@ export default function ResultsPage() {
           />
         </div>
 
-        {isLeadScore && jobData.totalRows > TOP_N && (
+        {isPrioritized && jobData.totalRows > TOP_N && (
           <div className="flex items-center gap-1 bg-pampas border border-cloudy/30 rounded-lg p-0.5">
             <button
               onClick={() => setShowTopOnly(true)}
@@ -551,7 +563,7 @@ export default function ResultsPage() {
         )}
 
         <span className="text-xs text-cloudy ml-auto">
-          {isLeadScore && showTopOnly && jobData.totalRows > TOP_N
+          {isPrioritized && showTopOnly && jobData.totalRows > TOP_N
             ? `Top ${table.getFilteredRowModel().rows.length} of ${jobData.totalRows} rows`
             : `${table.getFilteredRowModel().rows.length} of ${jobData.totalRows} rows`}
         </span>
