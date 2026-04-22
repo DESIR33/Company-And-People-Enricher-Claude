@@ -116,6 +116,9 @@ function init(db: Database.Database): void {
   if (!jobColumns.has("outreach_context")) {
     db.exec(`ALTER TABLE jobs ADD COLUMN outreach_context TEXT`);
   }
+  if (!jobColumns.has("score_rubric")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN score_rubric TEXT`);
+  }
   // Jobs that were in flight when the process died can never resume — their
   // workers and abort controllers are gone. Mark them failed so the UI can
   // tell the user instead of leaving them stuck at "processing".

@@ -1,15 +1,17 @@
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
 import { getFields, type FieldDefinition } from "./enrichment-fields";
+import type { ScoreRubric } from "./job-store";
 
 export type CustomFieldDef = { name: string; description: string };
 
 type AgentEnrichParams = {
-  type: "company" | "people" | "decision_maker";
+  type: "company" | "people" | "decision_maker" | "lead_score";
   identifier: string;
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
   outreachContext?: string;
+  scoreRubric?: ScoreRubric;
   model?: string;
   signal?: AbortSignal;
 };
@@ -138,6 +140,81 @@ Use "NA" for any field you genuinely cannot find. Do NOT use "NA" for qualificat
 }`;
     const userPrompt = `BUSINESS IDENTIFIER: ${params.identifier}
 (This is a local business name. It may include a city or location hint — if so, use it to disambiguate. If not, identify the most likely single business from web signals.)`;
+    return { systemPrompt, userPrompt };
+  }
+
+  if (params.type === "lead_score") {
+    const rubric = params.scoreRubric ?? {
+      icpCriteria: "(no ICP provided — default to moderate fit)",
+      painSignals: "(no pain signals provided — default to neutral)",
+      reachability: "(no reachability preferences — use general signals: named leaders, active LinkedIn, public contact info)",
+      weights: { icp: 40, pain: 35, reach: 25 },
+    };
+    const wIcp   = rubric.weights.icp;
+    const wPain  = rubric.weights.pain;
+    const wReach = rubric.weights.reach;
+
+    const systemPrompt = `You are a B2B lead scoring analyst. Given a company URL, you will research the company and then score it against a CONFIGURABLE RUBRIC across three dimensions: ICP fit, pain signal, and reachability. Your output feeds a prioritised top-N list that a human SDR works through — accuracy of the SCORE and honesty of the REASONING matter more than filling every field.
+
+FIELDS TO FIND:
+${fieldsSection}${firstLineSection}
+
+RUBRIC (defined by the user — score against THIS, not a generic definition):
+
+1. ICP FIT (weight: ${wIcp}%)
+   Criteria: ${rubric.icpCriteria}
+   Score 0–100:
+     - 90–100 = textbook match on every dimension in the criteria
+     - 70–89  = strong match on most dimensions, one or two soft misses
+     - 50–69  = partial match — right industry/segment but off on size/geo/stage
+     - 30–49  = adjacent space, weak match
+     - 0–29   = clearly not the ICP
+
+2. PAIN SIGNAL (weight: ${wPain}%)
+   Signals to look for: ${rubric.painSignals}
+   Score 0–100 based on observable evidence within the last ~12 months:
+     - 90–100 = multiple strong, recent signals (e.g. just raised + actively hiring for the role + public job postings match)
+     - 70–89  = one strong recent signal
+     - 50–69  = weaker / older signal, or adjacent pain (e.g. growth without specific trigger)
+     - 30–49  = inferred pain only — no concrete signal
+     - 0–29   = no visible pain / company appears stable and unmotivated to change
+   NEVER invent signals. If you cannot find evidence of a signal, say so and score low.
+
+3. REACHABILITY (weight: ${wReach}%)
+   Preferences: ${rubric.reachability}
+   Score 0–100 based on what you can actually find:
+     - 90–100 = named decision maker with active personal LinkedIn AND a second channel (public email / Twitter / personal site)
+     - 70–89  = named decision maker with ONE active channel
+     - 50–69  = company-level contact only (generic email, LinkedIn company page), but named leadership visible
+     - 30–49  = only generic company contact form / info@ email
+     - 0–29   = no workable channel found
+
+TOTAL SCORE:
+total_score = round((icp_fit_score × ${wIcp} + pain_signal_score × ${wPain} + reachability_score × ${wReach}) / 100)
+priority_tier = A (80–100) / B (65–79) / C (45–64) / D (0–44)
+
+RESEARCH PLAYBOOK:
+1. WebSearch for the company website and LinkedIn page. Use WebFetch to read the site (especially /about, /careers, /blog, /customers) and the LinkedIn company page.
+2. Search "[company name] funding" / "[company name] news [current year]" for recent signals. Check their /careers or a jobs board search for active hiring.
+3. Search 'site:linkedin.com/in "[company name]" (founder OR CEO OR "VP ${wReach >= 25 ? "Engineering OR VP Sales" : "Sales"}")' to find a named decision maker with an active profile. Check whether the profile has recent posts / recent activity.
+4. Extract standard company snapshot fields along the way — they are evidence for the scores and let a human sanity-check your judgement.
+
+HONESTY RULES:
+- Reasoning fields MUST cite concrete evidence from your research. If you write "actively hiring", name the role or link; if you write "named DM", give the name and title. Generic reasoning like "fits the ICP" without specifics is unacceptable — downgrade the score instead.
+- NEVER invent funding rounds, headcounts, or hiring signals. Use "NA" for fields you cannot find, and let the score reflect that gap.
+- The three sub-scores feed total_score via the weighted formula. Compute it. Do NOT fudge.
+- score_explanation is the one text field a human reads first — write TWO sentences: one that explains the score, one that tells the SDR what to do ("Prioritise — ICP fit + recent Series B + CEO posts weekly" / "Skip — wrong vertical, no visible trigger").
+${params.outreachContext?.trim() ? `\nOUTREACH CONTEXT (use in first_line and let it influence pain-signal interpretation): "${params.outreachContext.trim()}"\n` : ""}
+OUTPUT FORMAT:
+Respond with ONLY a valid JSON object. No markdown, no prose, no code fences.
+Use "NA" for company-snapshot fields you cannot find.
+Scoring fields (icp_fit_score, pain_signal_score, reachability_score, total_score, priority_tier, *_reasoning, score_explanation) MUST always be populated — they are a judgement grounded in what you DID find.
+
+{
+  ${allKeys}
+}`;
+    const userPrompt = `COMPANY IDENTIFIER: ${params.identifier}
+(This is the company's website URL or LinkedIn URL. Score it against the rubric above.)`;
     return { systemPrompt, userPrompt };
   }
 
@@ -312,7 +389,10 @@ export async function enrichWithAgent(
           model: params.model ?? "claude-haiku-4-5-20251001",
           systemPrompt: [systemPrompt, SYSTEM_PROMPT_DYNAMIC_BOUNDARY],
           allowedTools: ["WebSearch", "WebFetch"],
-          maxTurns: params.type === "decision_maker" ? 20 : params.type === "people" ? 15 : 10,
+          maxTurns:
+            params.type === "decision_maker" ? 20 :
+            params.type === "lead_score"     ? 18 :
+            params.type === "people"         ? 15 : 10,
           permissionMode: "acceptEdits",
           abortController: attemptAbort,
         },
