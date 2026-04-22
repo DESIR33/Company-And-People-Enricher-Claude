@@ -114,6 +114,26 @@ Given a business name (and optionally a city for disambiguation), the agent:
 > `google_business_profile_url` — but it is *not* included in the ranked
 > messaging-channel list.
 
+**Workflow helpers built into the multi-channel flow:**
+
+- **Separate city column.** Keep your CSV tidy — if you have business name in
+  one column and city in another, point the enricher at both and it will
+  disambiguate common names automatically (no more `"Joe's Pizza, Atlanta GA"`
+  mashed into a single field). Also available on the Decision Maker flow.
+- **Suppression list.** Paste handles / phones / emails / profile URLs you've
+  already contacted, one per line. Any matching channel gets force-demoted to
+  `do_not_use` and drops to the bottom of the rank — turns the tool into a
+  repeatable weekly workflow instead of a one-shot. US phone numbers match
+  regardless of `+1 / (404) 555-1234 / 4045551234` formatting.
+- **Current local time per row.** Every row captures a `business_timezone`
+  (IANA) and `business_hours_local` — the results table renders a live clock
+  in the business's timezone plus a "Likely open / Likely closed" badge so you
+  don't cold-call a plumber at midnight. The clock auto-ticks every minute.
+- **One-click outreach actions.** Each channel card has Copy value, Copy first
+  line, and Open-in-platform buttons (direct `tel:` / `sms:` / `wa.me` /
+  `mailto:` / Instagram / TikTok links). Click "Show all + actions" on any
+  row to expand every ranked channel with its opener rendered inline.
+
 ---
 
 ## Social Engager — LinkedIn engagement monitors

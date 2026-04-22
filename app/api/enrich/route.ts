@@ -64,6 +64,7 @@ const EnrichRequestSchema = z.object({
   type: z.enum(["company", "people", "decision_maker", "lead_score", "buying_trigger", "multi_channel"]),
   csvContent: z.string().min(1, "csvContent is required"),
   identifierColumn: z.string().min(1, "identifierColumn is required"),
+  cityColumn: z.string().trim().min(1).max(200).optional(),
   requestedFields: z
     .array(z.string().min(1))
     .min(1, "At least one field must be requested")
@@ -74,6 +75,10 @@ const EnrichRequestSchema = z.object({
   scoreRubric: ScoreRubricSchema.optional(),
   channelTypes: z.array(z.enum(CHANNEL_TYPES)).min(1).max(CHANNEL_TYPES.length).optional(),
   includeOwnerPersonal: z.boolean().optional(),
+  suppressionList: z
+    .array(z.string().trim().min(1).max(200))
+    .max(5000, "Suppression list is too large")
+    .optional(),
 });
 
 async function processJob(jobId: string): Promise<void> {
@@ -138,6 +143,7 @@ export async function POST(request: NextRequest) {
     type,
     csvContent,
     identifierColumn,
+    cityColumn,
     requestedFields,
     customFieldDefs,
     newsParams,
@@ -145,6 +151,7 @@ export async function POST(request: NextRequest) {
     scoreRubric,
     channelTypes,
     includeOwnerPersonal,
+    suppressionList,
   } = parsed.data;
 
   if (type === "lead_score" && !scoreRubric) {
@@ -162,6 +169,20 @@ export async function POST(request: NextRequest) {
         { error: `Column "${identifierColumn}" not found in CSV` },
         { status: 400 }
       );
+    }
+    if (cityColumn) {
+      if (!headers.includes(cityColumn)) {
+        return NextResponse.json(
+          { error: `City column "${cityColumn}" not found in CSV` },
+          { status: 400 }
+        );
+      }
+      if (cityColumn === identifierColumn) {
+        return NextResponse.json(
+          { error: "cityColumn must be a different column from identifierColumn" },
+          { status: 400 }
+        );
+      }
     }
     if (rows.length === 0) {
       return NextResponse.json({ error: "CSV has no data rows" }, { status: 400 });
@@ -260,6 +281,7 @@ export async function POST(request: NextRequest) {
     const job = createJob({
       type,
       identifierColumn,
+      cityColumn,
       requestedFields: finalRequestedFields,
       customFieldDefs,
       newsParams,
@@ -267,6 +289,7 @@ export async function POST(request: NextRequest) {
       scoreRubric,
       channelTypes,
       includeOwnerPersonal,
+      suppressionList,
       rows,
     });
 

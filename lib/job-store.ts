@@ -31,6 +31,7 @@ export type Job = {
   createdAt: number;
   updatedAt: number;
   identifierColumn: string;
+  cityColumn?: string;
   requestedFields: string[];
   customFieldDefs: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
@@ -38,6 +39,7 @@ export type Job = {
   scoreRubric?: ScoreRubric;
   channelTypes?: ChannelType[];
   includeOwnerPersonal?: boolean;
+  suppressionList?: string[];
   rows: EnrichmentRow[];
   totalRows: number;
   processedRows: number;
@@ -76,6 +78,7 @@ type JobMetaRow = {
   created_at: number;
   updated_at: number;
   identifier_column: string;
+  city_column: string | null;
   requested_fields: string;
   custom_field_defs: string;
   news_params: string | null;
@@ -83,6 +86,7 @@ type JobMetaRow = {
   score_rubric: string | null;
   channel_types: string | null;
   include_owner_personal: number | null;
+  suppression_list: string | null;
   total_rows: number;
   processed_rows: number;
   error: string | null;
@@ -109,6 +113,7 @@ function jobFromDb(meta: JobMetaRow, rows: JobRowRow[]): Job {
     createdAt: meta.created_at,
     updatedAt: meta.updated_at,
     identifierColumn: meta.identifier_column,
+    cityColumn: meta.city_column ?? undefined,
     requestedFields: JSON.parse(meta.requested_fields),
     customFieldDefs: JSON.parse(meta.custom_field_defs),
     newsParams: meta.news_params ? JSON.parse(meta.news_params) : undefined,
@@ -119,6 +124,7 @@ function jobFromDb(meta: JobMetaRow, rows: JobRowRow[]): Job {
       meta.include_owner_personal === null || meta.include_owner_personal === undefined
         ? undefined
         : Boolean(meta.include_owner_personal),
+    suppressionList: meta.suppression_list ? JSON.parse(meta.suppression_list) : undefined,
     rows: rows.map(rowFromDb),
     totalRows: meta.total_rows,
     processedRows: meta.processed_rows,
@@ -129,6 +135,7 @@ function jobFromDb(meta: JobMetaRow, rows: JobRowRow[]): Job {
 export function createJob(params: {
   type: EnrichmentType;
   identifierColumn: string;
+  cityColumn?: string;
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
@@ -136,6 +143,7 @@ export function createJob(params: {
   scoreRubric?: ScoreRubric;
   channelTypes?: ChannelType[];
   includeOwnerPersonal?: boolean;
+  suppressionList?: string[];
   rows: Record<string, string>[];
 }): Job {
   const db = getDb();
@@ -144,12 +152,12 @@ export function createJob(params: {
   const customFieldDefs = params.customFieldDefs ?? [];
 
   const insertMeta = db.prepare(`
-    INSERT INTO jobs (id, type, status, created_at, updated_at, identifier_column,
+    INSERT INTO jobs (id, type, status, created_at, updated_at, identifier_column, city_column,
       requested_fields, custom_field_defs, news_params, outreach_context, score_rubric,
-      channel_types, include_owner_personal, total_rows, processed_rows)
-    VALUES (@id, @type, 'pending', @now, @now, @identifierColumn,
+      channel_types, include_owner_personal, suppression_list, total_rows, processed_rows)
+    VALUES (@id, @type, 'pending', @now, @now, @identifierColumn, @cityColumn,
       @requestedFields, @customFieldDefs, @newsParams, @outreachContext, @scoreRubric,
-      @channelTypes, @includeOwnerPersonal, @totalRows, 0)
+      @channelTypes, @includeOwnerPersonal, @suppressionList, @totalRows, 0)
   `);
   const insertRow = db.prepare(`
     INSERT INTO job_rows (job_id, row_index, original_data, enriched_data, status)
@@ -162,6 +170,7 @@ export function createJob(params: {
       type: params.type,
       now,
       identifierColumn: params.identifierColumn,
+      cityColumn: params.cityColumn?.trim() ? params.cityColumn.trim() : null,
       requestedFields: JSON.stringify(params.requestedFields),
       customFieldDefs: JSON.stringify(customFieldDefs),
       newsParams: params.newsParams ? JSON.stringify(params.newsParams) : null,
@@ -172,6 +181,9 @@ export function createJob(params: {
         : null,
       includeOwnerPersonal:
         params.includeOwnerPersonal === undefined ? null : params.includeOwnerPersonal ? 1 : 0,
+      suppressionList: params.suppressionList && params.suppressionList.length > 0
+        ? JSON.stringify(params.suppressionList)
+        : null,
       totalRows: params.rows.length,
     });
     for (let i = 0; i < params.rows.length; i++) {

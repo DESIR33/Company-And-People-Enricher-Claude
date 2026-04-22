@@ -482,6 +482,16 @@ export const MULTI_CHANNEL_FIELD_GROUPS: FieldGroup[] = [
         label: "Website Contact Form URL",
         description: "Direct URL to the website contact form if present (e.g. /contact, /get-a-quote). 'NA' if only mailto or phone are offered.",
       },
+      {
+        key: "business_timezone",
+        label: "Business Timezone",
+        description: "IANA timezone identifier for the business's primary location (e.g. 'America/New_York', 'Europe/London', 'Asia/Tokyo'). Used to surface the current local time in the results UI so users don't call at midnight. Infer from the business's city / address. 'NA' if the location cannot be determined.",
+      },
+      {
+        key: "business_hours_local",
+        label: "Business Hours (Local)",
+        description: "Human-readable operating hours in the business's local time — concise, one line. Examples: 'Mon-Fri 8am-6pm; Sat 9am-3pm; closed Sun' or '24/7' or 'By appointment only'. Pull from Google Business Profile or the website footer. 'NA' if unknown.",
+      },
     ],
   },
   {

@@ -125,6 +125,12 @@ function init(db: Database.Database): void {
   if (!jobColumns.has("include_owner_personal")) {
     db.exec(`ALTER TABLE jobs ADD COLUMN include_owner_personal INTEGER`);
   }
+  if (!jobColumns.has("city_column")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN city_column TEXT`);
+  }
+  if (!jobColumns.has("suppression_list")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN suppression_list TEXT`);
+  }
   // Jobs that were in flight when the process died can never resume — their
   // workers and abort controllers are gone. Mark them failed so the UI can
   // tell the user instead of leaving them stuck at "processing".

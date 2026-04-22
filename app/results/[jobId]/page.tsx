@@ -98,6 +98,40 @@ function toTitleCase(str: string): string {
   return str.replace(/[_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Returns { localTime, isLikelyOpen, tz } for a business given an IANA
+// timezone string. isLikelyOpen is a crude heuristic: Mon-Sat 8am-8pm in the
+// business's local time. It exists so the UI can flash a "probably closed"
+// warning before the user calls at midnight, NOT as authoritative hours.
+function businessLocalTimeInfo(
+  tz: string | undefined
+): { localTime: string; isLikelyOpen: boolean; tz: string } | null {
+  const trimmed = tz?.trim();
+  if (!trimmed || trimmed.toUpperCase() === "NA") return null;
+  try {
+    const now = new Date();
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: trimmed,
+      hour: "numeric",
+      minute: "2-digit",
+      weekday: "short",
+    });
+    const parts = fmt.formatToParts(now);
+    const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "");
+    const dayPart = parts.find((p) => p.type === "weekday")?.value ?? "";
+    const dayPeriod = parts.find((p) => p.type === "dayPeriod")?.value ?? "";
+    const isSunday = dayPart === "Sun";
+    // Convert to 24h hour for the open-window check.
+    let h24 = hour;
+    if (dayPeriod.toLowerCase() === "pm" && hour !== 12) h24 = hour + 12;
+    if (dayPeriod.toLowerCase() === "am" && hour === 12) h24 = 0;
+    const isLikelyOpen = !isSunday && h24 >= 8 && h24 < 20;
+    const localTime = fmt.format(now);
+    return { localTime, isLikelyOpen, tz: trimmed };
+  } catch {
+    return null;
+  }
+}
+
 // Channel icon per type. Falls back to a generic chat bubble so a new channel
 // type added to the schema later doesn't crash the cell.
 const CHANNEL_ICON: Record<ChannelType, typeof MessageCircle> = {
@@ -257,6 +291,40 @@ function ChannelRow({ c, expanded }: { c: Channel; expanded: boolean }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function LocalTimeCell({ tz }: { tz: string }) {
+  // Self-ticking clock so the badge doesn't go stale mid-session. One-minute
+  // tick is enough since the open/closed band has 12-hour granularity.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  // `now` is reactive — recompute each render.
+  void now;
+  const info = businessLocalTimeInfo(tz);
+  if (!info) {
+    return tz
+      ? <span className="text-cloudy text-xs">{tz}</span>
+      : <span className="text-cloudy/40 text-xs">—</span>;
+  }
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[11px] text-gray-900 font-medium tabular-nums">
+        {info.localTime}
+      </span>
+      <span className="text-[10px] text-cloudy">{info.tz}</span>
+      <span className={clsx(
+        "inline-flex items-center self-start px-1.5 py-0.5 rounded text-[10px] font-medium",
+        info.isLikelyOpen
+          ? "bg-emerald-100 text-emerald-700"
+          : "bg-amber-100 text-amber-800"
+      )}>
+        {info.isLikelyOpen ? "Likely open" : "Likely closed"}
+      </span>
     </div>
   );
 }
@@ -551,6 +619,12 @@ export default function ResultsPage() {
         // of the raw JSON the generic renderer would produce.
         if (key === "channels") {
           return <ChannelsCell raw={v} />;
+        }
+
+        // Business timezone — show the CURRENT local time there + a rough
+        // open/closed badge so the user doesn't cold-call at 11pm.
+        if (key === "business_timezone") {
+          return <LocalTimeCell tz={v} />;
         }
 
         // Numeric score — render as a colored pill.

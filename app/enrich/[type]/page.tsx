@@ -79,8 +79,10 @@ export default function EnrichPage() {
   const [rowCount,         setRowCount]         = useState(0);
   const [headers,          setHeaders]          = useState<string[]>([]);
   const [identifierColumn, setIdentifierColumn] = useState("");
+  const [cityColumn,       setCityColumn]       = useState("");
   const [selectedFields,   setSelectedFields]   = useState<string[]>([]);
   const [customFields,     setCustomFields]     = useState<CustomField[]>([]);
+  const [suppressionText,  setSuppressionText]  = useState("");
   const [isSubmitting,     setIsSubmitting]     = useState(false);
   const [error,            setError]            = useState("");
 
@@ -119,8 +121,10 @@ export default function EnrichPage() {
     setRowCount(0);
     setHeaders([]);
     setIdentifierColumn("");
+    setCityColumn("");
     setSelectedFields([]);
     setCustomFields([]);
+    setSuppressionText("");
     setNewsSelected(false);
     setNewsCount(3);
     setNewsTimeframe("last 3 months");
@@ -292,8 +296,16 @@ export default function EnrichPage() {
                 weights: { icp: weightIcp, pain: weightPain, reach: weightReach },
               }
             : undefined,
+          cityColumn: (isMultiChannel || isDM) && cityColumn ? cityColumn : undefined,
           channelTypes: isMultiChannel ? selectedChannelTypes : undefined,
           includeOwnerPersonal: isMultiChannel ? includeOwnerPersonal : undefined,
+          suppressionList: isMultiChannel
+            ? suppressionText
+                .split(/\r?\n/)
+                .map((s) => s.trim())
+                .filter(Boolean)
+                .slice(0, 5000)
+            : undefined,
         }),
       });
       const data = await res.json();
@@ -428,6 +440,29 @@ export default function EnrichPage() {
                   <option key={h} value={h}>{h}</option>
                 ))}
               </select>
+
+              {(isDM || isMultiChannel) && (
+                <div className="mt-3">
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                    City column <span className="text-cloudy font-normal">(optional, improves disambiguation)</span>
+                  </label>
+                  <p className="text-[11px] text-cloudy mb-1.5">
+                    If your CSV has a separate city / location column, point to it and the agent will disambiguate common business names automatically — no need to mash it into one field.
+                  </p>
+                  <select
+                    value={cityColumn}
+                    onChange={(e) => setCityColumn(e.target.value)}
+                    className="w-full bg-white border border-cloudy/40 text-gray-900 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  >
+                    <option value="">— none —</option>
+                    {headers
+                      .filter((h) => h !== identifierColumn)
+                      .map((h) => (
+                        <option key={h} value={h}>{h}</option>
+                      ))}
+                  </select>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -611,6 +646,26 @@ export default function EnrichPage() {
                 aria-label="Include owner-personal channels"
               />
             </label>
+
+            <div className="space-y-1.5">
+              <div className="flex items-baseline justify-between">
+                <label htmlFor="suppression" className="text-sm font-medium text-gray-800">
+                  Suppression list <span className="text-cloudy font-normal">(optional)</span>
+                </label>
+                <span className="text-xs text-cloudy">{suppressionText.split(/[\s,;\n]+/).filter(Boolean).length} entries</span>
+              </div>
+              <p className="text-xs text-cloudy">
+                Paste one handle / phone / email / profile URL per line — anyone you&apos;ve already contacted, opted out, or closed. Any matching channel in the results is force-demoted to <code>do_not_use</code> and drops to the bottom of the rank. US phone numbers match regardless of +1 / (404) 555-1234 / 4045551234 formatting.
+              </p>
+              <textarea
+                id="suppression"
+                value={suppressionText}
+                onChange={(e) => setSuppressionText(e.target.value.slice(0, 50_000))}
+                rows={4}
+                placeholder={"+1 404-555-1234\nhi@joespizza.com\n@joes_plumbing_atl\nhttps://instagram.com/old_handle"}
+                className="w-full border border-cloudy/40 rounded-md px-3 py-2 text-xs font-mono placeholder:text-cloudy/70 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition resize-y"
+              />
+            </div>
 
             <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2.5">
               <p className="text-[11px] text-amber-800 leading-relaxed">

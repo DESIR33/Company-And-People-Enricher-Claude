@@ -329,6 +329,7 @@ CHANNEL DISCOVERY PLAYBOOK — work through these sources in order:
    - Facebook business page /about, /info tabs.
    - Instagram bio (look for "DM for quote" / "text us" / wa.me link / linktree).
    - Yelp / Angi / Thumbtack / Nextdoor profile if discoverable.
+   - Also capture business_timezone as a valid IANA identifier (e.g. "America/New_York", "Europe/London", "America/Los_Angeles") inferred from the business's city / address — the UI shows the user the business's CURRENT local time so they don't call at 11pm. Also capture business_hours_local as a one-line human string (e.g. "Mon-Fri 8am-6pm; Sat 9am-3pm; closed Sun") from Google Business Profile or the website footer. Use "NA" for either if unknown.
 3. OWNER IDENTIFICATION — try in order, stop on confident match:
    a. LinkedIn: 'site:linkedin.com/in "[business]" (owner OR founder OR "general manager")'.
    b. Google Business Profile review responses ("Hi from [Name], owner").

@@ -5,6 +5,7 @@ import { updateRow, type Job } from "./job-store";
 import { parseChannels } from "./channels/schema";
 import { rescoreChannels } from "./channels/scoring";
 import { rankChannels } from "./channels/ranker";
+import { applySuppression, buildSuppressionIndex } from "./channels/suppression";
 import type { Channel } from "./channels/types";
 
 const NEWS_KEY_RE = /^recent_news_\d+$/;
@@ -79,9 +80,14 @@ function actionFromTier(tier: "A" | "B" | "C" | "D"): string {
 }
 
 // The agent emits `channels` as a JSON array (stringified by normalizeFields).
-// Parse, validate, deterministic-rescore, rerank, and re-stringify so downstream
-// code sees a trusted, ordered list under enrichedData.channels.
-function reconcileMultiChannel(enriched: Record<string, string>): Record<string, string> {
+// Parse, validate, apply suppression, rescore, rerank, and re-stringify so
+// downstream code sees a trusted, ordered list under enrichedData.channels.
+// Suppression runs BEFORE re-scoring so the compliance penalty on suppressed
+// channels is baked into the final score.
+function reconcileMultiChannel(
+  enriched: Record<string, string>,
+  suppressionList: readonly string[] | undefined
+): Record<string, string> {
   const raw = enriched.channels;
   if (!raw) {
     return { ...enriched, channels: JSON.stringify([]) };
@@ -94,7 +100,9 @@ function reconcileMultiChannel(enriched: Record<string, string>): Record<string,
     return { ...enriched, channels: JSON.stringify([]) };
   }
   const validated = parseChannels(parsed);
-  const rescored = rescoreChannels(validated);
+  const suppressionIndex = buildSuppressionIndex(suppressionList);
+  const suppressed = applySuppression(validated, suppressionIndex);
+  const rescored = rescoreChannels(suppressed);
   const ranked = rankChannels(rescored);
   return { ...enriched, channels: JSON.stringify(ranked) };
 }
@@ -185,8 +193,8 @@ export async function enrichRow(
   const row = job.rows[rowIndex];
   if (!row) return;
 
-  const identifier = row.originalData[job.identifierColumn]?.trim() ?? "";
-  if (identifier === "") {
+  const rawIdentifier = row.originalData[job.identifierColumn]?.trim() ?? "";
+  if (rawIdentifier === "") {
     updateRow(jobId, rowIndex, {
       status: "error",
       error: "Missing identifier value",
@@ -194,6 +202,14 @@ export async function enrichRow(
     });
     return;
   }
+
+  // When a separate city column is provided, append it to the identifier so
+  // the agent can disambiguate common business names ("Joe's Pizza" → which
+  // one?) without forcing users to pre-concatenate the CSV.
+  const cityValue = job.cityColumn
+    ? row.originalData[job.cityColumn]?.trim() ?? ""
+    : "";
+  const identifier = cityValue ? `${rawIdentifier}, ${cityValue}` : rawIdentifier;
 
   const validFieldKeys = new Set(getFields(job.type).map((f) => f.key));
   const customFieldNames = new Set((job.customFieldDefs ?? []).map((f) => f.name));
@@ -239,7 +255,7 @@ export async function enrichRow(
     }
 
     if (job.type === "multi_channel") {
-      enrichedData = reconcileMultiChannel(enrichedData);
+      enrichedData = reconcileMultiChannel(enrichedData, job.suppressionList);
       enrichedData = mirrorChannelsToLegacyFields(enrichedData);
     }
 
