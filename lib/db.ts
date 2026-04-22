@@ -41,6 +41,73 @@ function init(db: Database.Database): void {
       PRIMARY KEY (job_id, row_index),
       FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS monitors (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      config TEXT NOT NULL,
+      schedule TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      webhook_url TEXT,
+      requested_fields TEXT NOT NULL,
+      custom_field_defs TEXT NOT NULL DEFAULT '[]',
+      outreach_context TEXT,
+      manual_engagers TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_run_at INTEGER,
+      next_run_at INTEGER,
+      lead_count_total INTEGER NOT NULL DEFAULT 0,
+      cost_usd_total REAL NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS monitor_runs (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      trigger TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      started_at INTEGER,
+      completed_at INTEGER,
+      discovered_count INTEGER NOT NULL DEFAULT 0,
+      new_count INTEGER NOT NULL DEFAULT 0,
+      dedup_count INTEGER NOT NULL DEFAULT 0,
+      enriched_count INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL NOT NULL DEFAULT 0,
+      estimated_leads INTEGER,
+      discovery_log TEXT,
+      error TEXT,
+      FOREIGN KEY (monitor_id) REFERENCES monitors(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS monitor_leads (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      linkedin_url TEXT NOT NULL,
+      profile_name TEXT,
+      engagement_type TEXT,
+      engagement_text TEXT,
+      post_url TEXT,
+      enriched_data TEXT NOT NULL DEFAULT '{}',
+      enrichment_status TEXT NOT NULL DEFAULT 'pending',
+      enrichment_error TEXT,
+      cost_usd REAL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      webhook_status TEXT,
+      UNIQUE(monitor_id, linkedin_url),
+      FOREIGN KEY (monitor_id) REFERENCES monitors(id) ON DELETE CASCADE,
+      FOREIGN KEY (run_id)     REFERENCES monitor_runs(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS monthly_usage (
+      month TEXT PRIMARY KEY,
+      lead_count INTEGER NOT NULL DEFAULT 0,
+      cost_usd REAL NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitor_runs_monitor ON monitor_runs(monitor_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_monitor_leads_monitor ON monitor_leads(monitor_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_monitor_leads_run     ON monitor_leads(run_id);
   `);
   // Backfill new columns on pre-existing databases.
   const jobColumns = new Set(
@@ -52,10 +119,15 @@ function init(db: Database.Database): void {
   // Jobs that were in flight when the process died can never resume — their
   // workers and abort controllers are gone. Mark them failed so the UI can
   // tell the user instead of leaving them stuck at "processing".
+  const now = Date.now();
   db.prepare(
     `UPDATE jobs SET status = 'failed', error = 'Interrupted by server restart', updated_at = ?
      WHERE status IN ('pending', 'processing')`
-  ).run(Date.now());
+  ).run(now);
+  db.prepare(
+    `UPDATE monitor_runs SET status = 'failed', error = 'Interrupted by server restart', updated_at = ?
+     WHERE status IN ('queued', 'running')`
+  ).run(now);
 }
 
 export function getDb(): Database.Database {

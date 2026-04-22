@@ -42,6 +42,45 @@ Upload a CSV, pick what fields you want enriched, and the agent does the researc
 
 ---
 
+## Social Engager — LinkedIn engagement monitors
+
+In addition to CSV enrichment, the app ships a **Social Engager** module
+(`/monitors`) that tracks LinkedIn engagement and turns engagers into enriched
+outreach leads. Four modes:
+
+- **Keyword tracking** — find recent posts matching topics, then collect engagers.
+- **Profile tracking** — watch a profile's new posts.
+- **Post monitoring** — re-check specific post URLs on a schedule.
+- **Instant scraping** — one-off extraction from a post URL.
+
+Each monitor stores a schedule (manual / daily / weekly / monthly / once),
+an optional webhook, the enrichment fields to apply to every engager, and an
+optional outreach context for the personalized first line. Runs dedupe against
+the monitor's lifetime lead set so you only pay to enrich each person once.
+
+> **Reality check on discovery.** LinkedIn blocks most unauthenticated page
+> fetches, so the discovery agent will often come back with `0` engagers on its
+> own. That's expected. The feature is designed for a pragmatic workflow: export
+> an engager list from Phantombuster / Apify / a manual copy, paste it into the
+> "Manual engager list" field on monitor creation, and let the runner do the
+> enrichment + webhook + dedup heavy lifting.
+
+**Scheduling.** Scheduled monitors advance their `next_run_at` after each run.
+A single endpoint (`/api/cron/run-monitors`) picks up every monitor whose
+`next_run_at` has passed and kicks off runs — point Vercel Cron, a cron job, or
+any external scheduler at it on whatever cadence you like (e.g. hourly). Protect
+it by setting `CRON_SECRET` and passing `Authorization: Bearer $CRON_SECRET`.
+
+**Approval gate.** Runs estimated to create ≥1000 leads enter
+`awaiting_approval` status and require a click in the UI before executing —
+avoids surprise bills from an overeager keyword monitor.
+
+**Monthly caps.** `/usage` shows this-month lead count and Claude spend against
+`MONITOR_MONTHLY_LEAD_CAP` and `MONITOR_MONTHLY_COST_CAP`. Runs are blocked
+once either cap is reached.
+
+---
+
 ## Prerequisites
 
 Before you begin, make sure you have the following installed:

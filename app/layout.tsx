@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Lora, DM_Sans } from "next/font/google";
 import "./globals.css";
 import { MeshBackground } from "@/app/components/mesh-background";
+import { MonitorNav } from "@/app/components/monitor-nav";
 
 const lora = Lora({
   subsets: ["latin"],
@@ -29,6 +30,7 @@ export default function RootLayout({
     <html lang="en" className={`${lora.variable} ${dmSans.variable} h-full`}>
       <body className="min-h-full">
         <MeshBackground />
+        <MonitorNav />
         {children}
       </body>
     </html>
