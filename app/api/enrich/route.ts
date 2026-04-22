@@ -10,7 +10,12 @@ import {
   clearJobAbortController,
 } from "@/lib/job-store";
 import { enrichRow } from "@/lib/enrich-row";
-import { getFields, LEAD_SCORE_REQUIRED_FIELDS } from "@/lib/enrichment-fields";
+import {
+  getFields,
+  LEAD_SCORE_REQUIRED_FIELDS,
+  BUYING_TRIGGER_REQUIRED_FIELDS,
+  BUYING_TRIGGER_SIGNAL_FIELDS,
+} from "@/lib/enrichment-fields";
 
 const MAX_ROWS = 200;
 const MAX_ROWS_LEAD_SCORE = 500;
@@ -54,7 +59,7 @@ const ScoreRubricSchema = z.object({
 });
 
 const EnrichRequestSchema = z.object({
-  type: z.enum(["company", "people", "decision_maker", "lead_score"]),
+  type: z.enum(["company", "people", "decision_maker", "lead_score", "buying_trigger"]),
   csvContent: z.string().min(1, "csvContent is required"),
   identifierColumn: z.string().min(1, "identifierColumn is required"),
   requestedFields: z
@@ -207,6 +212,23 @@ export async function POST(request: NextRequest) {
       finalRequestedFields = [
         ...requestedFields,
         ...LEAD_SCORE_REQUIRED_FIELDS.filter((f) => !existing.has(f)),
+      ];
+    }
+
+    // Buying-trigger jobs: the heat-score rollup + outreach payload is the
+    // whole point, so always include it. If the caller did not pick any trigger
+    // signals to look for, default to the full set — otherwise the agent has
+    // nothing to count.
+    if (type === "buying_trigger") {
+      const existing = new Set(requestedFields);
+      const hasAnySignal = BUYING_TRIGGER_SIGNAL_FIELDS.some((f) => existing.has(f));
+      const signalFieldsToAdd = hasAnySignal
+        ? []
+        : BUYING_TRIGGER_SIGNAL_FIELDS.filter((f) => !existing.has(f));
+      finalRequestedFields = [
+        ...requestedFields,
+        ...signalFieldsToAdd,
+        ...BUYING_TRIGGER_REQUIRED_FIELDS.filter((f) => !existing.has(f)),
       ];
     }
 

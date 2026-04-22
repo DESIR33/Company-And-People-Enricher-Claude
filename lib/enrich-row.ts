@@ -1,6 +1,6 @@
 import { enrichWithAgent } from "./agent";
 import { findWorkEmail } from "./prospeo";
-import { getFields } from "./enrichment-fields";
+import { getFields, BUYING_TRIGGER_SIGNAL_FIELDS } from "./enrichment-fields";
 import { updateRow, type Job } from "./job-store";
 
 const NEWS_KEY_RE = /^recent_news_\d+$/;
@@ -48,6 +48,72 @@ function reconcileLeadScores(
       out.priority_tier = tierFromScore(reported);
     }
   }
+  return out;
+}
+
+function heatTierFromScore(total: number): "A" | "B" | "C" | "D" {
+  if (total >= 80) return "A";
+  if (total >= 65) return "B";
+  if (total >= 45) return "C";
+  return "D";
+}
+
+function isRealTrigger(value: string | undefined): boolean {
+  if (!value) return false;
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed === "" || trimmed === "na" || trimmed === "n/a" || trimmed === "none") return false;
+  return true;
+}
+
+function actionFromTier(tier: "A" | "B" | "C" | "D"): string {
+  switch (tier) {
+    case "A": return "Reach out today";
+    case "B": return "Reach out this week";
+    case "C": return "Nurture";
+    case "D": return "Skip";
+  }
+}
+
+// The agent fills trigger_count and heat_tier, but it can drift (counting "NA"
+// as a trigger, picking a tier that doesn't match the score). Recompute both
+// from the observable signal fields so the downstream sort is trustworthy.
+// Also keep recommended_action aligned with the tier so an SDR doesn't get
+// "Skip" on an A-tier row.
+function reconcileBuyingTriggers(
+  enriched: Record<string, string>,
+  requestedFields: string[]
+): Record<string, string> {
+  const requested = new Set(requestedFields);
+  const signalFieldsInPlay = BUYING_TRIGGER_SIGNAL_FIELDS.filter((f) => requested.has(f));
+  const out = { ...enriched };
+
+  if (signalFieldsInPlay.length > 0) {
+    const actualCount = signalFieldsInPlay.filter((f) => isRealTrigger(enriched[f])).length;
+    out.trigger_count = String(actualCount);
+    if (actualCount === 0) {
+      out.strongest_trigger = "none";
+    }
+  }
+
+  const score = clampInt(enriched.heat_score, 0, 100);
+  if (score !== null) {
+    out.heat_score = String(score);
+    const tier = heatTierFromScore(score);
+    out.heat_tier = tier;
+    // If the agent already picked a recommended_action and it's one of the
+    // four valid labels, keep it (lets the trigger-recency upgrade rule stand).
+    // Otherwise, derive from tier.
+    const validActions = new Set([
+      "Reach out today",
+      "Reach out this week",
+      "Nurture",
+      "Skip",
+    ]);
+    if (!validActions.has(out.recommended_action)) {
+      out.recommended_action = actionFromTier(tier);
+    }
+  }
+
   return out;
 }
 
@@ -105,6 +171,10 @@ export async function enrichRow(
 
     if (job.type === "lead_score" && job.scoreRubric) {
       enrichedData = reconcileLeadScores(enrichedData, job.scoreRubric.weights);
+    }
+
+    if (job.type === "buying_trigger") {
+      enrichedData = reconcileBuyingTriggers(enrichedData, job.requestedFields);
     }
 
     if (job.type === "people" && job.requestedFields.includes("work_email")) {

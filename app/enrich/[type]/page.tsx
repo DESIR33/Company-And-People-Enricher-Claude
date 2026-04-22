@@ -4,7 +4,12 @@ import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { useRouter, useParams } from "next/navigation";
 import Papa from "papaparse";
-import { getFieldGroups, LEAD_SCORE_REQUIRED_FIELDS } from "@/lib/enrichment-fields";
+import {
+  getFieldGroups,
+  LEAD_SCORE_REQUIRED_FIELDS,
+  BUYING_TRIGGER_REQUIRED_FIELDS,
+  BUYING_TRIGGER_SIGNAL_FIELDS,
+} from "@/lib/enrichment-fields";
 import {
   Upload,
   FileSpreadsheet,
@@ -13,6 +18,7 @@ import {
   Users,
   UserSearch,
   Target,
+  Flame,
   Plus,
   X,
 } from "lucide-react";
@@ -25,13 +31,14 @@ const MAX_ROWS = 200;
 const MAX_ROWS_LEAD_SCORE = 500;
 
 const TABS = [
-  { type: "company"         as const, label: "Company",        icon: Building2 },
-  { type: "people"          as const, label: "People",         icon: Users },
-  { type: "decision_maker"  as const, label: "Decision Maker", icon: UserSearch },
-  { type: "lead_score"      as const, label: "Lead Score",     icon: Target },
+  { type: "company"         as const, label: "Company",         icon: Building2 },
+  { type: "people"          as const, label: "People",          icon: Users },
+  { type: "decision_maker"  as const, label: "Decision Maker",  icon: UserSearch },
+  { type: "lead_score"      as const, label: "Lead Score",      icon: Target },
+  { type: "buying_trigger"  as const, label: "Buying Triggers", icon: Flame },
 ];
 
-type EnrichType = "company" | "people" | "decision_maker" | "lead_score";
+type EnrichType = "company" | "people" | "decision_maker" | "lead_score" | "buying_trigger";
 
 const TIMEFRAME_OPTIONS = [
   { value: "last 30 days",   label: "Last 30 days" },
@@ -46,10 +53,11 @@ export default function EnrichPage() {
   const params    = useParams();
   const type      = params.type as EnrichType;
   const router    = useRouter();
-  const isCompany    = type === "company";
-  const isDM         = type === "decision_maker";
-  const isLeadScore  = type === "lead_score";
-  const maxRows      = isLeadScore ? MAX_ROWS_LEAD_SCORE : MAX_ROWS;
+  const isCompany      = type === "company";
+  const isDM           = type === "decision_maker";
+  const isLeadScore    = type === "lead_score";
+  const isBuyingTrigger = type === "buying_trigger";
+  const maxRows        = isLeadScore ? MAX_ROWS_LEAD_SCORE : MAX_ROWS;
 
   const [csvContent,       setCsvContent]       = useState("");
   const [fileName,         setFileName]         = useState("");
@@ -154,7 +162,10 @@ export default function EnrichPage() {
     setSelectedFields((p) => p.includes(key) ? p.filter((f) => f !== key) : [...p, key]);
 
   const selectableFields = allFields.filter(
-    (f) => !f.isParameterized && !(isLeadScore && LEAD_SCORE_REQUIRED_FIELDS.includes(f.key))
+    (f) =>
+      !f.isParameterized &&
+      !(isLeadScore && LEAD_SCORE_REQUIRED_FIELDS.includes(f.key)) &&
+      !(isBuyingTrigger && BUYING_TRIGGER_REQUIRED_FIELDS.includes(f.key))
   );
   const allStandardSelected = selectableFields.every((f) => selectedFields.includes(f.key));
   const toggleAll = () =>
@@ -190,7 +201,21 @@ export default function EnrichPage() {
   const leadScoreForcedFieldCount = isLeadScore
     ? LEAD_SCORE_REQUIRED_FIELDS.filter((f) => !selectedFields.includes(f)).length
     : 0;
-  const totalFieldCount = selectedFields.length + customFields.length + newsFieldCount + leadScoreForcedFieldCount;
+  const hasAnyTriggerSignalSelected = selectedFields.some((f) =>
+    BUYING_TRIGGER_SIGNAL_FIELDS.includes(f)
+  );
+  const buyingTriggerForcedFieldCount = isBuyingTrigger
+    ? BUYING_TRIGGER_REQUIRED_FIELDS.filter((f) => !selectedFields.includes(f)).length +
+      (hasAnyTriggerSignalSelected
+        ? 0
+        : BUYING_TRIGGER_SIGNAL_FIELDS.filter((f) => !selectedFields.includes(f)).length)
+    : 0;
+  const totalFieldCount =
+    selectedFields.length +
+    customFields.length +
+    newsFieldCount +
+    leadScoreForcedFieldCount +
+    buyingTriggerForcedFieldCount;
 
   const weightsSum = weightIcp + weightPain + weightReach;
   const weightsValid = weightsSum === 100;
@@ -198,7 +223,7 @@ export default function EnrichPage() {
   const handleSubmit = async () => {
     if (!csvContent)       return setError("No CSV loaded — drop a file above to get started.");
     if (!identifierColumn) return setError("Pick the column that contains the identifier.");
-    if (!isLeadScore && !selectedFields.length && !customFields.length && !newsSelected)
+    if (!isLeadScore && !isBuyingTrigger && !selectedFields.length && !customFields.length && !newsSelected)
       return setError("Select at least one field to enrich.");
 
     if (isLeadScore) {
@@ -225,7 +250,8 @@ export default function EnrichPage() {
           customFieldDefs: customFields,
           newsParams: newsSelected ? { count: newsCount, timeframe: newsTimeframe } : undefined,
           outreachContext:
-            selectedFields.includes("first_line") && outreachContext.trim().length > 0
+            (selectedFields.includes("first_line") || isBuyingTrigger) &&
+            outreachContext.trim().length > 0
               ? outreachContext.trim()
               : undefined,
           scoreRubric: isLeadScore
@@ -262,11 +288,11 @@ export default function EnrichPage() {
       <div className="space-y-2 py-2">
         <div className="flex items-baseline gap-3 overflow-hidden">
           <span className="text-3xl font-serif font-bold text-gray-900 tracking-tight">
-            {isLeadScore ? "Score" : "Enrich"}
+            {isLeadScore ? "Score" : isBuyingTrigger ? "Spot" : "Enrich"}
           </span>
           <TextRotate
-            texts={["Company", "People", "Decision Maker", "Lead Score"]}
-            initialIndex={isCompany ? 0 : isDM ? 2 : isLeadScore ? 3 : 1}
+            texts={["Company", "People", "Decision Maker", "Lead Score", "Buying Triggers"]}
+            initialIndex={isCompany ? 0 : isDM ? 2 : isLeadScore ? 3 : isBuyingTrigger ? 4 : 1}
             auto={false}
             animatePresenceInitial={true}
             splitBy="characters"
@@ -350,7 +376,7 @@ export default function EnrichPage() {
           {headers.length > 0 && csvContent && (
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                {isCompany || isLeadScore
+                {isCompany || isLeadScore || isBuyingTrigger
                   ? "Which column contains the company URL?"
                   : isDM
                   ? "Which column contains the business name?"
@@ -484,7 +510,11 @@ export default function EnrichPage() {
       <div className="bg-white rounded-xl border border-cloudy/30 overflow-hidden">
         <div className="px-6 py-4 border-b border-cloudy/20 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-gray-700">
-            {isLeadScore ? "Optional extra fields" : "Choose fields to enrich"}
+            {isLeadScore
+              ? "Optional extra fields"
+              : isBuyingTrigger
+              ? "Which buying triggers should we hunt for?"
+              : "Choose fields to enrich"}
           </h2>
           <button
             onClick={toggleAll}
@@ -504,8 +534,19 @@ export default function EnrichPage() {
               </p>
             </div>
           )}
+          {isBuyingTrigger && (
+            <div className="rounded-lg border border-brand-200 bg-brand-50/60 px-3 py-2.5">
+              <p className="text-xs font-medium text-gray-800">
+                Heat score + outreach payload are always included:
+              </p>
+              <p className="text-[11px] text-cloudy mt-1 leading-relaxed">
+                Trigger Count, Strongest Trigger, Trigger Summary, Heat Score (0–100), Heat Tier (A–D), Recommended Action, Outreach Angle, and a Personalized First Line that references the strongest trigger. Pick which trigger signals the agent should hunt for below — leave everything unchecked and it will run the full set.
+              </p>
+            </div>
+          )}
           {fieldGroups
             .filter((group) => !(isLeadScore && group.label === "Lead Score"))
+            .filter((group) => !(isBuyingTrigger && (group.label === "Heat Score" || group.label === "Outreach")))
             .map((group) => (
             <div key={group.label}>
               <p className="text-[11px] font-semibold text-cloudy uppercase tracking-wider mb-2">{group.label}</p>
@@ -685,8 +726,8 @@ export default function EnrichPage() {
         </div>
       </div>
 
-      {/* Outreach context — shown only when first-line field is selected */}
-      {selectedFields.includes("first_line") && (
+      {/* Outreach context — shown when first-line is selected, or always for buying_trigger (outreach fields are forced) */}
+      {(selectedFields.includes("first_line") || isBuyingTrigger) && (
         <div className="bg-white border border-cloudy/20 rounded-xl p-5 space-y-2">
           <div className="flex items-baseline justify-between">
             <label htmlFor="outreach-context" className="text-sm font-semibold text-gray-900">
@@ -733,6 +774,10 @@ export default function EnrichPage() {
               ? totalFieldCount > 0
                 ? `Score & prioritize · ${totalFieldCount} field${totalFieldCount !== 1 ? "s" : ""}`
                 : "Score & prioritize"
+              : isBuyingTrigger
+              ? totalFieldCount > 0
+                ? `Find triggers & generate openers · ${totalFieldCount} field${totalFieldCount !== 1 ? "s" : ""}`
+                : "Find triggers & generate openers"
               : totalFieldCount > 0
               ? `Start enrichment · ${totalFieldCount} field${totalFieldCount !== 1 ? "s" : ""}`
               : "Start enrichment"
