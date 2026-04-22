@@ -7,6 +7,7 @@ export type DiscoveryMode =
   | "signal_funding"
   | "signal_hiring"
   | "signal_news"
+  | "signal_reviews"
   | "directory";
 
 export type DirectorySource =
@@ -15,7 +16,11 @@ export type DirectorySource =
   | "github"
   | "google_maps"
   | "tech_stack"
-  | "custom";
+  | "custom"
+  | "yelp"
+  | "bbb"
+  | "angi"
+  | "facebook_pages";
 
 export type DirectoryConfig = {
   source: DirectorySource;

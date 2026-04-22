@@ -22,6 +22,10 @@ import {
   MapPin,
   Cpu,
   Link as LinkIcon,
+  Star,
+  ShieldCheck,
+  Hammer,
+  ThumbsUp,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { COMPANY_FIELD_GROUPS } from "@/lib/enrichment-fields";
@@ -32,6 +36,7 @@ type DiscoveryMode =
   | "signal_funding"
   | "signal_hiring"
   | "signal_news"
+  | "signal_reviews"
   | "directory";
 
 type DirectorySource =
@@ -40,7 +45,11 @@ type DirectorySource =
   | "github"
   | "google_maps"
   | "tech_stack"
-  | "custom";
+  | "custom"
+  | "yelp"
+  | "bbb"
+  | "angi"
+  | "facebook_pages";
 
 type DirectoryConfig = {
   source: DirectorySource;
@@ -102,6 +111,44 @@ const DEFAULT_ENRICH_FIELDS = [
   "website_url",
   "first_line",
 ];
+
+// When the search looks like it's for local SMBs, default to contact-channel
+// and review-signal fields instead of SaaS-flavored firmographics.
+const LOCAL_BUSINESS_ENRICH_FIELDS = [
+  "hq_location",
+  "description",
+  "business_phone",
+  "instagram_handle",
+  "facebook_page",
+  "google_business_url",
+  "website_url",
+  "google_rating",
+  "review_count",
+  "service_categories",
+  "service_area",
+  "first_line",
+];
+
+const LOCAL_DIRECTORY_SOURCES: DirectorySource[] = [
+  "yelp",
+  "bbb",
+  "angi",
+  "facebook_pages",
+  "google_maps",
+];
+
+function defaultEnrichFieldsForSearch(search: DiscoverySearch | null): string[] {
+  if (!search) return DEFAULT_ENRICH_FIELDS;
+  if (search.mode === "signal_reviews") return LOCAL_BUSINESS_ENRICH_FIELDS;
+  if (
+    search.mode === "directory" &&
+    search.directoryConfig &&
+    LOCAL_DIRECTORY_SOURCES.includes(search.directoryConfig.source)
+  ) {
+    return LOCAL_BUSINESS_ENRICH_FIELDS;
+  }
+  return DEFAULT_ENRICH_FIELDS;
+}
 
 export default function DiscoverPage() {
   return (
@@ -243,39 +290,82 @@ type CreateMode = "icp" | "lookalike" | "directory";
 
 const DIRECTORY_META: Record<
   DirectorySource,
-  { label: string; icon: typeof BookOpen; hint: string }
+  { label: string; icon: typeof BookOpen; hint: string; smbFriendly: boolean }
 > = {
-  yc: {
-    label: "Y Combinator",
-    icon: BookOpen,
-    hint: "Pull from the YC directory — filter by batch, category, or free text.",
-  },
-  producthunt: {
-    label: "Product Hunt",
-    icon: Rocket,
-    hint: "Recent launches by topic. Good for finding new, product-led companies.",
-  },
-  github: {
-    label: "GitHub Topics",
-    icon: Code,
-    hint: "Commercial orgs behind active repos on a given topic. Good for dev-tool ICPs.",
-  },
   google_maps: {
     label: "Google Maps",
     icon: MapPin,
-    hint: "Local businesses by category + geography. Best for field-services ICPs.",
+    hint: "Local businesses by category + geography. Best default for field-services.",
+    smbFriendly: true,
+  },
+  yelp: {
+    label: "Yelp",
+    icon: Star,
+    hint: "Yelp category search — good for restaurants, contractors, local services.",
+    smbFriendly: true,
+  },
+  bbb: {
+    label: "Better Business Bureau",
+    icon: ShieldCheck,
+    hint: "BBB-accredited businesses. Filters in established SMBs with real operations.",
+    smbFriendly: true,
+  },
+  angi: {
+    label: "Angi / HomeAdvisor",
+    icon: Hammer,
+    hint: "Home-services contractors — Angi, HomeAdvisor, Thumbtack.",
+    smbFriendly: true,
+  },
+  facebook_pages: {
+    label: "Facebook Pages",
+    icon: ThumbsUp,
+    hint: "Local businesses active on Facebook — many SMBs use FB as their web presence.",
+    smbFriendly: true,
   },
   tech_stack: {
     label: "Tech Stack",
     icon: Cpu,
     hint: "Companies publicly using a given product (BuiltWith, G2, case studies).",
+    smbFriendly: false,
   },
   custom: {
     label: "Custom URL",
     icon: LinkIcon,
     hint: "Paste any directory page URL. The agent extracts companies from it.",
+    smbFriendly: false,
+  },
+  yc: {
+    label: "Y Combinator",
+    icon: BookOpen,
+    hint: "YC directory — filter by batch or category. For tech/VC-backed ICPs.",
+    smbFriendly: false,
+  },
+  producthunt: {
+    label: "Product Hunt",
+    icon: Rocket,
+    hint: "Recent launches by topic. For product-led / tech companies.",
+    smbFriendly: false,
+  },
+  github: {
+    label: "GitHub Topics",
+    icon: Code,
+    hint: "Commercial orgs behind active repos. For dev-tool ICPs.",
+    smbFriendly: false,
   },
 };
+
+const DIRECTORY_SOURCE_ORDER: DirectorySource[] = [
+  "google_maps",
+  "yelp",
+  "bbb",
+  "angi",
+  "facebook_pages",
+  "tech_stack",
+  "custom",
+  "yc",
+  "producthunt",
+  "github",
+];
 
 function CreateSearchForm({
   onCancel,
@@ -293,7 +383,7 @@ function CreateSearchForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  const [dirSource, setDirSource] = useState<DirectorySource>("yc");
+  const [dirSource, setDirSource] = useState<DirectorySource>("google_maps");
   const [dirCategory, setDirCategory] = useState("");
   const [dirQuery, setDirQuery] = useState("");
   const [dirGeo, setDirGeo] = useState("");
@@ -492,8 +582,11 @@ function CreateSearchForm({
           <>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-2">Source</label>
+              <p className="text-[11px] text-cloudy mb-2">
+                Local-business sources are listed first. VC-style sources (YC, Product Hunt, GitHub) are at the end.
+              </p>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {(Object.keys(DIRECTORY_META) as DirectorySource[]).map((s) => {
+                {DIRECTORY_SOURCE_ORDER.map((s) => {
                   const meta = DIRECTORY_META[s];
                   const Icon = meta.icon;
                   const active = s === dirSource;
@@ -515,6 +608,11 @@ function CreateSearchForm({
                           strokeWidth={2}
                         />
                         <span className="text-xs font-semibold text-gray-800">{meta.label}</span>
+                        {meta.smbFriendly && (
+                          <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 uppercase tracking-wider">
+                            SMB
+                          </span>
+                        )}
                       </div>
                       <p className="text-[11px] text-cloudy leading-snug">{meta.hint}</p>
                     </button>
@@ -615,7 +713,11 @@ function CreateSearchForm({
               </div>
             )}
 
-            {dirSource === "google_maps" && (
+            {(dirSource === "google_maps" ||
+              dirSource === "yelp" ||
+              dirSource === "bbb" ||
+              dirSource === "angi" ||
+              dirSource === "facebook_pages") && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -624,13 +726,20 @@ function CreateSearchForm({
                   <input
                     value={dirCategory}
                     onChange={(e) => setDirCategory(e.target.value)}
-                    placeholder="HVAC contractor, dentist, gym"
+                    placeholder={
+                      dirSource === "angi"
+                        ? "plumber, roofer, electrician"
+                        : "HVAC contractor, dentist, gym"
+                    }
                     className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
-                    Geography
+                    Geography{" "}
+                    {dirSource !== "google_maps" && (
+                      <span className="text-cloudy font-normal">(recommended)</span>
+                    )}
                   </label>
                   <input
                     value={dirGeo}
@@ -822,6 +931,7 @@ function SearchDetail({ searchId }: { searchId: string }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [enriching, setEnriching] = useState(false);
   const [enrichFields, setEnrichFields] = useState<string[]>(DEFAULT_ENRICH_FIELDS);
+  const [userEditedFields, setUserEditedFields] = useState(false);
   const [showFields, setShowFields] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -852,6 +962,18 @@ function SearchDetail({ searchId }: { searchId: string }) {
       clearInterval(id);
     };
   }, [load, data]);
+
+  // Once the search loads, default the enrichment fields to something sensible
+  // for its source (local-biz defaults for SMB-y sources). Stop syncing once
+  // the user has toggled a checkbox themselves.
+  useEffect(() => {
+    if (!data || userEditedFields) return;
+    const t = setTimeout(
+      () => setEnrichFields(defaultEnrichFieldsForSearch(data.search)),
+      0
+    );
+    return () => clearTimeout(t);
+  }, [data, userEditedFields]);
 
   if (!data) {
     return (
@@ -1186,13 +1308,14 @@ function SearchDetail({ searchId }: { searchId: string }) {
                           <input
                             type="checkbox"
                             checked={checked}
-                            onChange={() =>
+                            onChange={() => {
+                              setUserEditedFields(true);
                               setEnrichFields((prev) =>
                                 prev.includes(f.key)
                                   ? prev.filter((k) => k !== f.key)
                                   : [...prev, f.key]
-                              )
-                            }
+                              );
+                            }}
                             className="accent-brand-500"
                           />
                           {f.label}
@@ -1269,6 +1392,8 @@ function modeLabel(mode: DiscoveryMode, source?: DirectorySource): string {
       return "Hiring signal";
     case "signal_news":
       return "News signal";
+    case "signal_reviews":
+      return "Reviews signal";
     case "directory":
       return source ? `Directory · ${DIRECTORY_META[source].label}` : "Directory";
     default:

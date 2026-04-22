@@ -45,10 +45,18 @@ const NewsSchema = BaseSchema.extend({
     .max(20),
 });
 
+const ReviewsSchema = BaseSchema.extend({
+  signalType: z.literal("reviews"),
+  reviewPlatform: z.enum(["google", "yelp", "any"]).default("google"),
+  reviewSentiment: z.enum(["positive", "negative", "any"]).default("any"),
+  minReviewCount: z.number().int().min(1).max(100).default(3),
+});
+
 const CreateSignalSchema = z.discriminatedUnion("signalType", [
   FundingSchema,
   HiringSchema,
   NewsSchema,
+  ReviewsSchema,
 ]);
 
 export async function GET() {
@@ -99,9 +107,17 @@ export async function POST(request: NextRequest) {
   } else if (data.signalType === "hiring") {
     signalType = "hiring";
     config = { ...baseConfig, roles: data.roles };
-  } else {
+  } else if (data.signalType === "news") {
     signalType = "news";
     config = { ...baseConfig, keywords: data.keywords };
+  } else {
+    signalType = "reviews";
+    config = {
+      ...baseConfig,
+      reviewPlatform: data.reviewPlatform,
+      reviewSentiment: data.reviewSentiment,
+      minReviewCount: data.minReviewCount,
+    };
   }
 
   const monitor = createSignalMonitor({

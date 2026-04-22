@@ -21,6 +21,7 @@ const MODE_BY_SIGNAL: Record<SignalType, DiscoveryMode> = {
   funding: "signal_funding",
   hiring: "signal_hiring",
   news: "signal_news",
+  reviews: "signal_reviews",
 };
 
 export type StartSignalRunResult =
@@ -44,6 +45,9 @@ function buildAgentConfig(
     maxAmount: c.maxAmount,
     roles: c.roles,
     keywords: c.keywords,
+    reviewPlatform: c.reviewPlatform,
+    reviewSentiment: c.reviewSentiment,
+    minReviewCount: c.minReviewCount,
     excludeDomains,
   };
 }
@@ -69,6 +73,14 @@ function buildQueryText(monitor: SignalMonitor): string {
   }
   if (signalType === "news" && config.keywords?.length) {
     bits.push(`Keywords: ${config.keywords.join(", ")}`);
+  }
+  if (signalType === "reviews") {
+    if (config.reviewPlatform)
+      bits.push(`Platform: ${config.reviewPlatform}`);
+    if (config.reviewSentiment)
+      bits.push(`Sentiment: ${config.reviewSentiment}`);
+    if (config.minReviewCount !== undefined)
+      bits.push(`Min fresh reviews: ${config.minReviewCount}`);
   }
   if (config.icpHint) bits.push(`ICP hint: ${config.icpHint}`);
   return bits.join(" · ");

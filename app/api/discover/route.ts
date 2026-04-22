@@ -29,7 +29,18 @@ const LookalikeSchema = z.object({
 
 const DirectoryConfigSchema = z
   .object({
-    source: z.enum(["yc", "producthunt", "github", "google_maps", "tech_stack", "custom"]),
+    source: z.enum([
+      "yc",
+      "producthunt",
+      "github",
+      "google_maps",
+      "tech_stack",
+      "custom",
+      "yelp",
+      "bbb",
+      "angi",
+      "facebook_pages",
+    ]),
     category: z.string().trim().max(200).optional(),
     query: z.string().trim().max(500).optional(),
     geo: z.string().trim().max(200).optional(),
@@ -42,6 +53,9 @@ const DirectoryConfigSchema = z
       if (v.source === "custom") return !!v.url;
       if (v.source === "google_maps") return !!(v.category || v.query);
       if (v.source === "tech_stack") return !!(v.techStack || v.query);
+      if (v.source === "yelp" || v.source === "bbb" || v.source === "angi" || v.source === "facebook_pages") {
+        return !!(v.category || v.query);
+      }
       return true;
     },
     { message: "Directory config is missing required fields for the chosen source" }

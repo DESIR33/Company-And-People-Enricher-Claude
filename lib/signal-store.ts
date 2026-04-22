@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getDb } from "./db";
 import type { MonitorSchedule } from "./monitor-store";
 
-export type SignalType = "funding" | "hiring" | "news";
+export type SignalType = "funding" | "hiring" | "news" | "reviews";
 
 export type SignalConfig = {
   industryFilter?: string;
@@ -17,6 +17,10 @@ export type SignalConfig = {
   roles?: string[];
   // news-specific
   keywords?: string[];
+  // reviews-specific
+  reviewPlatform?: "google" | "yelp" | "any";
+  reviewSentiment?: "positive" | "negative" | "any";
+  minReviewCount?: number;
 };
 
 export type SignalMonitor = {

@@ -2,7 +2,7 @@ import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agen
 import type { DirectoryConfig, DiscoveryMode } from "./discovery-store";
 
 export type SignalAgentConfig = {
-  signalType: "funding" | "hiring" | "news";
+  signalType: "funding" | "hiring" | "news" | "reviews";
   timeframe: string;
   industryFilter?: string;
   geoFilter?: string;
@@ -12,6 +12,9 @@ export type SignalAgentConfig = {
   maxAmount?: number;
   roles?: string[];
   keywords?: string[];
+  reviewPlatform?: "google" | "yelp" | "any";
+  reviewSentiment?: "positive" | "negative" | "any";
+  minReviewCount?: number;
   excludeDomains?: string[];
 };
 
@@ -154,6 +157,39 @@ Workflow:
 Target: ${params.maxResults} companies hiring within the timeframe.`;
   }
 
+  if (cfg.signalType === "reviews") {
+    const platform = cfg.reviewPlatform ?? "google";
+    const sentiment = cfg.reviewSentiment ?? "any";
+    const minCount = cfg.minReviewCount ?? 3;
+    const platformLabel =
+      platform === "google" ? "Google Maps / Google Business Profile" :
+      platform === "yelp" ? "Yelp" :
+      "Google + Yelp";
+    const sentimentGuidance =
+      sentiment === "positive"
+        ? "Only include businesses with recent POSITIVE reviews (4★ or 5★). Lots of recent positive reviews = growth + reachable, engaged owner."
+        : sentiment === "negative"
+          ? "Only include businesses with recent NEGATIVE reviews (1★ or 2★). Recent negative reviews = distress / churn risk — often an opportunity pitch for competitors."
+          : "Include businesses with either recent positive OR negative reviews — volume change is the intent signal.";
+    return `Find up to ${params.maxResults} local businesses that have fresh review activity within ${cfg.timeframe}.
+
+Platform: ${platformLabel}
+Sentiment filter: ${sentiment}
+Minimum fresh reviews required per business: ${minCount}
+Filters: ${filters}${extra}${exclude}
+
+${sentimentGuidance}
+
+Workflow:
+1. Use Google Maps search and Yelp category pages filtered by the geography and industry above.
+2. For each candidate, WebFetch the Google Business Profile / Yelp page and check the recent review dates.
+3. Require at least ${minCount} reviews within ${cfg.timeframe}.
+4. matchReason MUST cite the review count and sentiment — e.g. "7 Google reviews in the last 14 days, avg 4.8★" or "3 new 1★ reviews citing long wait times".
+5. Return websiteUrl, google_business_url (as sourceUrl), location, and a score that reflects fit + review momentum.
+
+Target: ${params.maxResults} local businesses with fresh review activity.`;
+  }
+
   // news
   const keywords =
     cfg.keywords?.join(", ") ||
@@ -278,6 +314,82 @@ Workflow:
 Target: ${params.maxResults} companies visibly using ${tech}.`;
     }
 
+    case "yelp": {
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = cfg.geo ?? "(none)";
+      return `Pull up to ${params.maxResults} local businesses from Yelp.
+
+Category: ${category}
+Geography: ${geo}${extra}
+
+Workflow:
+1. Start at https://www.yelp.com/search?find_desc=${encodeURIComponent(category)}&find_loc=${encodeURIComponent(geo)} — Yelp's category search is stable and paginates deterministically.
+2. For each business on the results page, capture: name, website (from the Yelp profile's "Business website" field), phone, address, star rating, review count.
+3. Prefer businesses with ≥10 reviews and a linked website — solo/inactive listings are often dead numbers.
+4. Skip chains if a single location listing doesn't represent the parent brand. Return the independent operators.
+5. matchReason MUST include the Yelp rating + review count — e.g. "4.6★ with 142 reviews on Yelp".
+6. If Yelp blocks the fetch, fall back to Google: "<category> <geo> site:yelp.com/biz".
+
+Target: ${params.maxResults} Yelp-listed local businesses.`;
+    }
+
+    case "bbb": {
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = cfg.geo ?? "(none)";
+      return `Pull up to ${params.maxResults} accredited local businesses from the Better Business Bureau (BBB) directory.
+
+Category: ${category}
+Geography: ${geo}${extra}
+
+Workflow:
+1. Start at https://www.bbb.org/search?find_country=USA&find_text=${encodeURIComponent(category)}&find_loc=${encodeURIComponent(geo)}.
+2. Prefer BBB-accredited businesses (A+ / A rating) — they tend to be established SMBs with real operations.
+3. Capture: business name, website (from the BBB profile), phone, address, years in business, BBB rating.
+4. matchReason MUST cite the BBB rating and years in business — e.g. "A+ rated, 14 years in business, BBB accredited".
+5. Skip franchises of national chains; BBB sometimes lists them alongside independents.
+6. If BBB blocks the fetch, fall back to Google: "site:bbb.org/us/<state> <category> <city>".
+
+Target: ${params.maxResults} BBB-listed local businesses.`;
+    }
+
+    case "angi": {
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = cfg.geo ?? "(none)";
+      return `Pull up to ${params.maxResults} home-services contractors from Angi, HomeAdvisor, or Thumbtack.
+
+Category: ${category}
+Geography: ${geo}${extra}
+
+Workflow:
+1. Try all three sources — Angi (https://www.angi.com/companylist/us/<state>/<city>/<category>), HomeAdvisor (https://www.homeadvisor.com/c.<category>.<state>.<city>.html), and Thumbtack (https://www.thumbtack.com/<state>/<city>/<category>).
+2. These are contractor-heavy directories — focus on businesses with a profile that shows photos, reviews, and completed jobs.
+3. For each: capture name, website (from the Angi/HA/TT profile), phone, service area, category, rating + reviews.
+4. matchReason MUST cite the platform + rating + project volume — e.g. "HomeAdvisor Top Rated, 87 completed projects, 4.8★".
+5. Many contractors are listed on multiple platforms — dedupe by phone number or website.
+6. If fetching fails, fall back to Google: "<category> <geo> site:angi.com OR site:homeadvisor.com OR site:thumbtack.com".
+
+Target: ${params.maxResults} home-services contractors.`;
+    }
+
+    case "facebook_pages": {
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = cfg.geo ?? "(none)";
+      return `Pull up to ${params.maxResults} local businesses that are ACTIVE on Facebook — many SMBs have a FB page as their primary web presence.
+
+Category: ${category}
+Geography: ${geo}${extra}
+
+Workflow:
+1. Search Google for: site:facebook.com/<slug-patterns> OR 'facebook.com "<category>" "<geo>"'.
+2. Also try Facebook's own search: https://www.facebook.com/search/pages/?q=${encodeURIComponent(`${category} ${geo}`)} (may require login — fall back if blocked).
+3. Prefer pages with: recent posts (last 30 days), >100 likes, a website link in the About section, a verified business badge.
+4. For each: capture business name, website (from the FB About section), facebook_page URL, phone, location.
+5. matchReason MUST cite recent FB activity — e.g. "Posts weekly, 2.3k likes, 4.7★ on FB reviews".
+6. Skip pages that are clearly personal/hobbyist or have had no activity in 6+ months.
+
+Target: ${params.maxResults} local businesses with an active Facebook presence.`;
+    }
+
     case "custom": {
       const url = cfg.url ?? "(no URL provided)";
       const hint = cfg.query ?? "";
@@ -308,7 +420,8 @@ function buildPrompts(params: DiscoveryParams): { system: string; user: string }
   if (
     params.mode === "signal_funding" ||
     params.mode === "signal_hiring" ||
-    params.mode === "signal_news"
+    params.mode === "signal_news" ||
+    params.mode === "signal_reviews"
   ) {
     if (!params.signalConfig) {
       throw new Error("signalConfig is required for signal_* modes");

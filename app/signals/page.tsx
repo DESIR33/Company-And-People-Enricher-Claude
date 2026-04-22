@@ -15,10 +15,11 @@ import {
   ChevronRight,
   Trash2,
   Zap,
+  Star,
 } from "lucide-react";
 import { clsx } from "clsx";
 
-type SignalType = "funding" | "hiring" | "news";
+type SignalType = "funding" | "hiring" | "news" | "reviews";
 type Schedule = "manual" | "once" | "daily" | "weekly" | "monthly";
 
 type SignalMonitor = {
@@ -49,27 +50,39 @@ type DiscoverySearch = {
 
 const SIGNAL_META: Record<
   SignalType,
-  { label: string; icon: typeof Banknote; hint: string; accent: string }
+  { label: string; icon: typeof Banknote; hint: string; accent: string; smb: boolean }
 > = {
-  funding: {
-    label: "Funding",
-    icon: Banknote,
-    hint: "Companies that just raised — TechCrunch, Crunchbase, SEC Form D",
-    accent: "text-emerald-600",
-  },
-  hiring: {
-    label: "Hiring",
-    icon: Briefcase,
-    hint: "Companies posting open roles — LinkedIn Jobs, Indeed, careers pages",
-    accent: "text-indigo-600",
+  reviews: {
+    label: "Fresh Reviews",
+    icon: Star,
+    hint: "Local businesses with a surge of new Google / Yelp reviews — growth signal for SMBs.",
+    accent: "text-yellow-600",
+    smb: true,
   },
   news: {
     label: "News",
     icon: Newspaper,
-    hint: "Expansions, launches, partnerships — Google News, local business journals",
+    hint: "Expansions, launches, partnerships — Google News, local business journals.",
     accent: "text-amber-600",
+    smb: false,
+  },
+  hiring: {
+    label: "Hiring",
+    icon: Briefcase,
+    hint: "Companies posting open roles — LinkedIn Jobs, Indeed, careers pages.",
+    accent: "text-indigo-600",
+    smb: false,
+  },
+  funding: {
+    label: "Funding",
+    icon: Banknote,
+    hint: "Companies that just raised — TechCrunch, Crunchbase, SEC Form D. For VC-backed ICPs.",
+    accent: "text-emerald-600",
+    smb: false,
   },
 };
+
+const SIGNAL_ORDER: SignalType[] = ["reviews", "news", "hiring", "funding"];
 
 const SCHEDULE_LABEL: Record<Schedule, string> = {
   manual: "Manual only",
@@ -400,6 +413,12 @@ function renderConfigSummary(m: SignalMonitor): string {
   if (m.signalType === "news" && Array.isArray(c.keywords) && c.keywords.length) {
     bits.push(`Keywords: ${(c.keywords as string[]).join(", ")}`);
   }
+  if (m.signalType === "reviews") {
+    if (typeof c.reviewPlatform === "string") bits.push(`Platform: ${c.reviewPlatform}`);
+    if (typeof c.reviewSentiment === "string") bits.push(`Sentiment: ${c.reviewSentiment}`);
+    if (typeof c.minReviewCount === "number")
+      bits.push(`Min fresh: ${c.minReviewCount}`);
+  }
   return bits.join(" · ") || "No filters";
 }
 
@@ -426,7 +445,7 @@ function CreateForm({
   onCancel: () => void;
   onCreated: () => void;
 }) {
-  const [signalType, setSignalType] = useState<SignalType>("funding");
+  const [signalType, setSignalType] = useState<SignalType>("reviews");
   const [name, setName] = useState("");
   const [schedule, setSchedule] = useState<Schedule>("weekly");
   const [timeframe, setTimeframe] = useState("last 14 days");
@@ -444,6 +463,12 @@ function CreateForm({
 
   const [rolesText, setRolesText] = useState("");
   const [keywordsText, setKeywordsText] = useState("");
+
+  const [reviewPlatform, setReviewPlatform] =
+    useState<"google" | "yelp" | "any">("google");
+  const [reviewSentiment, setReviewSentiment] =
+    useState<"positive" | "negative" | "any">("any");
+  const [minReviewCount, setMinReviewCount] = useState(3);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -480,6 +505,8 @@ function CreateForm({
       return setError("Add at least one role (comma- or line-separated).");
     if (signalType === "news" && keywords.length === 0)
       return setError("Add at least one news keyword.");
+    if (signalType === "reviews" && !geoFilter.trim())
+      return setError("Add a geography — reviews-mode is local-business only.");
 
     const body: Record<string, unknown> = {
       signalType,
@@ -502,6 +529,10 @@ function CreateForm({
       body.roles = roles;
     } else if (signalType === "news") {
       body.keywords = keywords;
+    } else if (signalType === "reviews") {
+      body.reviewPlatform = reviewPlatform;
+      body.reviewSentiment = reviewSentiment;
+      body.minReviewCount = minReviewCount;
     }
 
     setSubmitting(true);
@@ -543,8 +574,8 @@ function CreateForm({
 
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-2">Signal type</label>
-          <div className="grid grid-cols-3 gap-2">
-            {(Object.keys(SIGNAL_META) as SignalType[]).map((t) => {
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {SIGNAL_ORDER.map((t) => {
               const m = SIGNAL_META[t];
               const Icon = m.icon;
               const active = t === signalType;
@@ -566,6 +597,11 @@ function CreateForm({
                       strokeWidth={2}
                     />
                     <span className="text-xs font-semibold text-gray-800">{m.label}</span>
+                    {m.smb && (
+                      <span className="text-[9px] font-medium px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 uppercase tracking-wider">
+                        SMB
+                      </span>
+                    )}
                   </div>
                   <p className="text-[11px] text-cloudy leading-snug">{m.hint}</p>
                 </button>
@@ -691,6 +727,62 @@ function CreateForm({
                 {keywords.length} keyword{keywords.length !== 1 ? "s" : ""} parsed
               </p>
             )}
+          </div>
+        )}
+
+        {signalType === "reviews" && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Platform
+              </label>
+              <select
+                value={reviewPlatform}
+                onChange={(e) =>
+                  setReviewPlatform(e.target.value as "google" | "yelp" | "any")
+                }
+                className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+              >
+                <option value="google">Google Business Profile</option>
+                <option value="yelp">Yelp</option>
+                <option value="any">Either</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Sentiment
+              </label>
+              <select
+                value={reviewSentiment}
+                onChange={(e) =>
+                  setReviewSentiment(
+                    e.target.value as "positive" | "negative" | "any"
+                  )
+                }
+                className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+              >
+                <option value="positive">Positive (4–5★) — growth signal</option>
+                <option value="negative">Negative (1–2★) — distress / competitor play</option>
+                <option value="any">Any fresh review activity</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Min fresh reviews per business
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={minReviewCount}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n))
+                    setMinReviewCount(Math.max(1, Math.min(100, Math.round(n))));
+                }}
+                className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition tabular"
+              />
+            </div>
           </div>
         )}
 

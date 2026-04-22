@@ -39,6 +39,36 @@ export const COMPANY_FIELD_GROUPS: FieldGroup[] = [
     ],
   },
   {
+    label: "Local Business",
+    fields: [
+      {
+        key: "years_in_business",
+        label: "Years in Business",
+        description: "How long the business has been operating. Return an integer (years since founding) when you can confirm it from the company's website, BBB profile, chamber of commerce listing, or 'established YYYY' copy. Return the year itself (e.g. 'Est. 2011') if the count is ambiguous.",
+      },
+      {
+        key: "google_rating",
+        label: "Google Rating",
+        description: "Star rating on Google Maps / Google Business Profile, as a number with one decimal (e.g. 4.7). Use the current value shown on the business's Google listing.",
+      },
+      {
+        key: "review_count",
+        label: "Google Review Count",
+        description: "Total number of Google reviews on the business's Google Business Profile (e.g. 312). Use the current visible count, not an approximation.",
+      },
+      {
+        key: "service_area",
+        label: "Service Area",
+        description: "Cities, ZIPs, or mile radius the business serves. Prefer what's published on their Google Business Profile 'service area' or 'Areas we serve' page. One short phrase, e.g. 'Austin metro + 50 mile radius' or 'Travis + Williamson counties, TX'.",
+      },
+      {
+        key: "service_categories",
+        label: "Service Categories",
+        description: "The specific services the business offers, comma-separated. Prefer the categories listed on their Google Business Profile or the Services page of their website. Example: 'AC repair, HVAC install, duct cleaning, heat pump service'.",
+      },
+    ],
+  },
+  {
     label: "Contact Channels",
     fields: [
       {
