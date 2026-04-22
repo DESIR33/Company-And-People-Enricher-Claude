@@ -43,6 +43,7 @@ type DiscoveryParams = {
   seedCompanies?: string[];
   signalConfig?: SignalAgentConfig;
   directoryConfig?: DirectoryConfig;
+  preFetched?: string;
   maxResults: number;
   signal?: AbortSignal;
   model?: string;
@@ -390,6 +391,24 @@ Workflow:
 Target: ${params.maxResults} local businesses with an active Facebook presence.`;
     }
 
+    case "firecrawl_search": {
+      const q = cfg.query ?? cfg.category ?? "(no query)";
+      return `Extract up to ${params.maxResults} companies from the Firecrawl web-search results below.
+
+Search query: "${q}"${extra}
+
+Pre-fetched search results are included BELOW under "PRE-FETCHED CONTENT". Each block is the cleaned markdown of a top search result, with a real URL.
+
+Workflow:
+1. Read the pre-fetched blocks. Identify distinct companies mentioned with enough signal to verify (name, website, a sentence about what they do).
+2. When a block IS a company homepage, take companyName from the page title/hero and websiteUrl from the block's URL header.
+3. When a block is a listicle or aggregator, extract the individual companies mentioned, using the aggregator URL as the sourceUrl.
+4. matchReason MUST reference which pre-fetched result the company came from — e.g. "Listed in result #3: 'Top 10 Austin roofers'".
+5. Dedupe by domain. Skip companies that don't have a verifiable website.
+
+Target: ${params.maxResults} companies extracted from the search results.`;
+    }
+
     case "custom": {
       const url = cfg.url ?? "(no URL provided)";
       const hint = cfg.query ?? "";
@@ -552,7 +571,10 @@ function dedupKey(c: DiscoveredCompany): string {
 export async function discoverCompanies(
   params: DiscoveryParams
 ): Promise<DiscoveryAgentResult> {
-  const { system, user } = buildPrompts(params);
+  const { system, user: baseUser } = buildPrompts(params);
+  const user = params.preFetched
+    ? `${baseUser}\n\n=== PRE-FETCHED CONTENT (from Firecrawl) ===\n\n${params.preFetched}\n\n=== END PRE-FETCHED CONTENT ===\n\nPrefer the pre-fetched content above as your primary source. Use WebSearch/WebFetch only to fill gaps or verify specific facts.`
+    : baseUser;
   const push = (line: string): void => params.onLog?.(line);
 
   push(`Discovery started — mode=${params.mode}, maxResults=${params.maxResults}`);

@@ -40,6 +40,7 @@ const DirectoryConfigSchema = z
       "bbb",
       "angi",
       "facebook_pages",
+      "firecrawl_search",
     ]),
     category: z.string().trim().max(200).optional(),
     query: z.string().trim().max(500).optional(),
@@ -53,6 +54,7 @@ const DirectoryConfigSchema = z
       if (v.source === "custom") return !!v.url;
       if (v.source === "google_maps") return !!(v.category || v.query);
       if (v.source === "tech_stack") return !!(v.techStack || v.query);
+      if (v.source === "firecrawl_search") return !!(v.query || v.category);
       if (v.source === "yelp" || v.source === "bbb" || v.source === "angi" || v.source === "facebook_pages") {
         return !!(v.category || v.query);
       }

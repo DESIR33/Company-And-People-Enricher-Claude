@@ -26,6 +26,7 @@ import {
   ShieldCheck,
   Hammer,
   ThumbsUp,
+  Flame,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { COMPANY_FIELD_GROUPS } from "@/lib/enrichment-fields";
@@ -49,7 +50,8 @@ type DirectorySource =
   | "yelp"
   | "bbb"
   | "angi"
-  | "facebook_pages";
+  | "facebook_pages"
+  | "firecrawl_search";
 
 type DirectoryConfig = {
   source: DirectorySource;
@@ -163,8 +165,24 @@ function DiscoverPageInner() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const [firecrawlOn, setFirecrawlOn] = useState<boolean | null>(null);
   const searchParams = useSearchParams();
   const deepLinkId = searchParams.get("search");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/integrations/status")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setFirecrawlOn(!!d.firecrawl);
+      })
+      .catch(() => {
+        if (!cancelled) setFirecrawlOn(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!deepLinkId) return;
@@ -213,6 +231,25 @@ function DiscoverPageInner() {
             <p className="text-sm text-cloudy mt-1">
               Generate lead lists from scratch. Describe your ICP or paste seed companies — the agent searches the web and returns candidates you can feed into enrichment.
             </p>
+            {firecrawlOn !== null && (
+              <div className="mt-2 inline-flex items-center gap-1.5 text-[11px]">
+                <Flame
+                  className={clsx(
+                    "w-3 h-3",
+                    firecrawlOn ? "text-orange-500" : "text-cloudy"
+                  )}
+                  strokeWidth={2.5}
+                />
+                <span className={clsx(firecrawlOn ? "text-orange-700" : "text-cloudy")}>
+                  Firecrawl {firecrawlOn ? "enabled" : "not configured"}
+                </span>
+                <span className="text-cloudy">
+                  {firecrawlOn
+                    ? "— pre-fetching clean markdown before the agent runs"
+                    : "— set FIRECRAWL_API_KEY to unlock JS-heavy directories"}
+                </span>
+              </div>
+            )}
           </div>
           <button
             onClick={() => setCreating((v) => !v)}
@@ -322,6 +359,12 @@ const DIRECTORY_META: Record<
     hint: "Local businesses active on Facebook — many SMBs use FB as their web presence.",
     smbFriendly: true,
   },
+  firecrawl_search: {
+    label: "Firecrawl Search",
+    icon: Flame,
+    hint: "Web search via Firecrawl — each result is pre-scraped into clean markdown before the agent extracts companies. Requires FIRECRAWL_API_KEY.",
+    smbFriendly: false,
+  },
   tech_stack: {
     label: "Tech Stack",
     icon: Cpu,
@@ -360,6 +403,7 @@ const DIRECTORY_SOURCE_ORDER: DirectorySource[] = [
   "bbb",
   "angi",
   "facebook_pages",
+  "firecrawl_search",
   "tech_stack",
   "custom",
   "yc",
@@ -813,6 +857,23 @@ function CreateSearchForm({
                     className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
                   />
                 </div>
+              </div>
+            )}
+
+            {dirSource === "firecrawl_search" && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Search query
+                </label>
+                <input
+                  value={dirQuery}
+                  onChange={(e) => setDirQuery(e.target.value)}
+                  placeholder='"top 20 HVAC contractors in Austin TX" OR "best Shopify Plus agencies 2026"'
+                  className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                />
+                <p className="text-[11px] text-cloudy mt-1">
+                  Google-style query. Firecrawl runs the search and pre-scrapes the top 10 results into clean markdown. The agent extracts companies from those blocks.
+                </p>
               </div>
             )}
 

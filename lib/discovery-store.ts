@@ -20,7 +20,8 @@ export type DirectorySource =
   | "yelp"
   | "bbb"
   | "angi"
-  | "facebook_pages";
+  | "facebook_pages"
+  | "firecrawl_search";
 
 export type DirectoryConfig = {
   source: DirectorySource;
