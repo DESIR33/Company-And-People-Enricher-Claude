@@ -16,11 +16,41 @@ import {
   Download,
   ChevronRight,
   ChevronDown,
+  BookOpen,
+  Rocket,
+  Code,
+  MapPin,
+  Cpu,
+  Link as LinkIcon,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { COMPANY_FIELD_GROUPS } from "@/lib/enrichment-fields";
 
-type DiscoveryMode = "icp" | "lookalike";
+type DiscoveryMode =
+  | "icp"
+  | "lookalike"
+  | "signal_funding"
+  | "signal_hiring"
+  | "signal_news"
+  | "directory";
+
+type DirectorySource =
+  | "yc"
+  | "producthunt"
+  | "github"
+  | "google_maps"
+  | "tech_stack"
+  | "custom";
+
+type DirectoryConfig = {
+  source: DirectorySource;
+  category?: string;
+  query?: string;
+  geo?: string;
+  url?: string;
+  techStack?: string;
+  batch?: string;
+};
 type DiscoveryStatus =
   | "queued"
   | "running"
@@ -34,6 +64,7 @@ type DiscoverySearch = {
   name: string;
   queryText: string;
   seedCompanies?: string[];
+  directoryConfig?: DirectoryConfig;
   maxResults: number;
   status: DiscoveryStatus;
   createdAt: number;
@@ -208,6 +239,44 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 // Create form
 // ----------------------------------------------------------------
 
+type CreateMode = "icp" | "lookalike" | "directory";
+
+const DIRECTORY_META: Record<
+  DirectorySource,
+  { label: string; icon: typeof BookOpen; hint: string }
+> = {
+  yc: {
+    label: "Y Combinator",
+    icon: BookOpen,
+    hint: "Pull from the YC directory — filter by batch, category, or free text.",
+  },
+  producthunt: {
+    label: "Product Hunt",
+    icon: Rocket,
+    hint: "Recent launches by topic. Good for finding new, product-led companies.",
+  },
+  github: {
+    label: "GitHub Topics",
+    icon: Code,
+    hint: "Commercial orgs behind active repos on a given topic. Good for dev-tool ICPs.",
+  },
+  google_maps: {
+    label: "Google Maps",
+    icon: MapPin,
+    hint: "Local businesses by category + geography. Best for field-services ICPs.",
+  },
+  tech_stack: {
+    label: "Tech Stack",
+    icon: Cpu,
+    hint: "Companies publicly using a given product (BuiltWith, G2, case studies).",
+  },
+  custom: {
+    label: "Custom URL",
+    icon: LinkIcon,
+    hint: "Paste any directory page URL. The agent extracts companies from it.",
+  },
+};
+
 function CreateSearchForm({
   onCancel,
   onCreated,
@@ -215,7 +284,7 @@ function CreateSearchForm({
   onCancel: () => void;
   onCreated: (searchId: string) => void;
 }) {
-  const [mode, setMode] = useState<DiscoveryMode>("icp");
+  const [mode, setMode] = useState<CreateMode>("icp");
   const [name, setName] = useState("");
   const [icpText, setIcpText] = useState("");
   const [seedText, setSeedText] = useState("");
@@ -223,6 +292,15 @@ function CreateSearchForm({
   const [maxResults, setMaxResults] = useState(25);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  const [dirSource, setDirSource] = useState<DirectorySource>("yc");
+  const [dirCategory, setDirCategory] = useState("");
+  const [dirQuery, setDirQuery] = useState("");
+  const [dirGeo, setDirGeo] = useState("");
+  const [dirUrl, setDirUrl] = useState("");
+  const [dirTechStack, setDirTechStack] = useState("");
+  const [dirBatch, setDirBatch] = useState("");
+  const [dirExtra, setDirExtra] = useState("");
 
   const seedCompanies = useMemo(
     () =>
@@ -249,7 +327,7 @@ function CreateSearchForm({
         queryText: icpText.trim(),
         maxResults,
       };
-    } else {
+    } else if (mode === "lookalike") {
       if (seedCompanies.length === 0)
         return setError("Paste at least one seed company (one per line).");
       body = {
@@ -257,6 +335,40 @@ function CreateSearchForm({
         name: trimmedName,
         seedCompanies,
         queryText: lookalikeExtra.trim(),
+        maxResults,
+      };
+    } else {
+      const directoryConfig: DirectoryConfig = { source: dirSource };
+      if (dirCategory.trim()) directoryConfig.category = dirCategory.trim();
+      if (dirQuery.trim()) directoryConfig.query = dirQuery.trim();
+      if (dirGeo.trim()) directoryConfig.geo = dirGeo.trim();
+      if (dirUrl.trim()) directoryConfig.url = dirUrl.trim();
+      if (dirTechStack.trim()) directoryConfig.techStack = dirTechStack.trim();
+      if (dirBatch.trim()) directoryConfig.batch = dirBatch.trim();
+
+      if (dirSource === "custom" && !directoryConfig.url)
+        return setError("Paste the directory URL to fetch from.");
+      if (dirSource === "google_maps" && !directoryConfig.category && !directoryConfig.query)
+        return setError("Give a business category (e.g. 'HVAC contractor').");
+      if (dirSource === "google_maps" && !directoryConfig.geo)
+        return setError("Give a geography for the Google Maps search (e.g. 'Austin, TX').");
+      if (dirSource === "tech_stack" && !directoryConfig.techStack && !directoryConfig.query)
+        return setError("Name the tech stack / product (e.g. 'Shopify Plus').");
+      if (
+        (dirSource === "yc" || dirSource === "producthunt" || dirSource === "github") &&
+        !directoryConfig.category &&
+        !directoryConfig.query &&
+        !directoryConfig.batch
+      )
+        return setError(
+          "Give at least one filter (category, free-text, or batch) so the agent has something to search for."
+        );
+
+      body = {
+        mode: "directory",
+        name: trimmedName,
+        directoryConfig,
+        queryText: dirExtra.trim(),
         maxResults,
       };
     }
@@ -300,7 +412,7 @@ function CreateSearchForm({
 
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-2">Mode</label>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <ModeCard
               active={mode === "icp"}
               onClick={() => setMode("icp")}
@@ -314,6 +426,13 @@ function CreateSearchForm({
               icon={Copy}
               label="Look-alike"
               hint="Paste 2–10 existing customers or targets. The agent finds companies with the same shape."
+            />
+            <ModeCard
+              active={mode === "directory"}
+              onClick={() => setMode("directory")}
+              icon={BookOpen}
+              label="Directory"
+              hint="Pull from a specific source: YC, Product Hunt, GitHub, Google Maps, BuiltWith, or a custom URL."
             />
           </div>
         </div>
@@ -364,6 +483,240 @@ function CreateSearchForm({
                 onChange={(e) => setLookalikeExtra(e.target.value.slice(0, 2000))}
                 placeholder="Limit to US only, avoid enterprises >500 employees, etc."
                 className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+              />
+            </div>
+          </>
+        )}
+
+        {mode === "directory" && (
+          <>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-2">Source</label>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                {(Object.keys(DIRECTORY_META) as DirectorySource[]).map((s) => {
+                  const meta = DIRECTORY_META[s];
+                  const Icon = meta.icon;
+                  const active = s === dirSource;
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setDirSource(s)}
+                      className={clsx(
+                        "text-left rounded-lg border p-3 transition-all",
+                        active
+                          ? "border-brand-300 bg-brand-50"
+                          : "border-cloudy/30 hover:border-cloudy/50 hover:bg-pampas"
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <Icon
+                          className={clsx("w-3.5 h-3.5", active ? "text-brand-500" : "text-cloudy")}
+                          strokeWidth={2}
+                        />
+                        <span className="text-xs font-semibold text-gray-800">{meta.label}</span>
+                      </div>
+                      <p className="text-[11px] text-cloudy leading-snug">{meta.hint}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {dirSource === "yc" && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Batch <span className="text-cloudy font-normal">(optional)</span>
+                  </label>
+                  <input
+                    value={dirBatch}
+                    onChange={(e) => setDirBatch(e.target.value)}
+                    placeholder="W24, S23"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Category <span className="text-cloudy font-normal">(optional)</span>
+                  </label>
+                  <input
+                    value={dirCategory}
+                    onChange={(e) => setDirCategory(e.target.value)}
+                    placeholder="B2B, Fintech, Consumer"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Free-text <span className="text-cloudy font-normal">(optional)</span>
+                  </label>
+                  <input
+                    value={dirQuery}
+                    onChange={(e) => setDirQuery(e.target.value)}
+                    placeholder="devtools, AI agents"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+              </div>
+            )}
+
+            {dirSource === "producthunt" && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Topic / category
+                  </label>
+                  <input
+                    value={dirCategory}
+                    onChange={(e) => setDirCategory(e.target.value)}
+                    placeholder="productivity, developer-tools, marketing"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Free-text <span className="text-cloudy font-normal">(optional)</span>
+                  </label>
+                  <input
+                    value={dirQuery}
+                    onChange={(e) => setDirQuery(e.target.value)}
+                    placeholder="AI, automation, design"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+              </div>
+            )}
+
+            {dirSource === "github" && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Topic
+                  </label>
+                  <input
+                    value={dirCategory}
+                    onChange={(e) => setDirCategory(e.target.value)}
+                    placeholder="kubernetes, typescript, nextjs"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Free-text query <span className="text-cloudy font-normal">(optional)</span>
+                  </label>
+                  <input
+                    value={dirQuery}
+                    onChange={(e) => setDirQuery(e.target.value)}
+                    placeholder="language:Go stars:>500"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition font-mono text-[12px]"
+                  />
+                </div>
+              </div>
+            )}
+
+            {dirSource === "google_maps" && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Business category
+                  </label>
+                  <input
+                    value={dirCategory}
+                    onChange={(e) => setDirCategory(e.target.value)}
+                    placeholder="HVAC contractor, dentist, gym"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Geography
+                  </label>
+                  <input
+                    value={dirGeo}
+                    onChange={(e) => setDirGeo(e.target.value)}
+                    placeholder="Austin, TX"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+              </div>
+            )}
+
+            {dirSource === "tech_stack" && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Tech / product
+                  </label>
+                  <input
+                    value={dirTechStack}
+                    onChange={(e) => setDirTechStack(e.target.value)}
+                    placeholder="Shopify Plus, Salesforce, HubSpot"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Industry <span className="text-cloudy font-normal">(optional)</span>
+                  </label>
+                  <input
+                    value={dirCategory}
+                    onChange={(e) => setDirCategory(e.target.value)}
+                    placeholder="Ecommerce, SaaS"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Geography <span className="text-cloudy font-normal">(optional)</span>
+                  </label>
+                  <input
+                    value={dirGeo}
+                    onChange={(e) => setDirGeo(e.target.value)}
+                    placeholder="USA, Canada"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+              </div>
+            )}
+
+            {dirSource === "custom" && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Directory URL
+                  </label>
+                  <input
+                    value={dirUrl}
+                    onChange={(e) => setDirUrl(e.target.value)}
+                    placeholder="https://example.com/directory?category=foo"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Extraction hint <span className="text-cloudy font-normal">(optional)</span>
+                  </label>
+                  <input
+                    value={dirQuery}
+                    onChange={(e) => setDirQuery(e.target.value)}
+                    placeholder="Only the B2B companies, skip sponsored rows"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Additional ICP constraints <span className="text-cloudy font-normal">(optional)</span>
+              </label>
+              <textarea
+                value={dirExtra}
+                onChange={(e) => setDirExtra(e.target.value.slice(0, 2000))}
+                rows={2}
+                placeholder="Only companies with a US HQ, avoid pure services firms."
+                className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
               />
             </div>
           </>
@@ -618,7 +971,7 @@ function SearchDetail({ searchId }: { searchId: string }) {
           <StatusBadge status={search.status} />
           <h2 className="text-sm font-semibold text-gray-800 truncate">{search.name}</h2>
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 uppercase tracking-wide">
-            {search.mode === "icp" ? "ICP search" : "Look-alike"}
+            {modeLabel(search.mode, search.directoryConfig?.source)}
           </span>
         </div>
         <div className="flex items-center gap-4 text-[11px] text-cloudy tabular whitespace-nowrap">
@@ -633,17 +986,7 @@ function SearchDetail({ searchId }: { searchId: string }) {
 
       {/* query summary */}
       <div className="px-5 py-3 border-b border-cloudy/20 bg-pampas/40">
-        {search.mode === "icp" ? (
-          <p className="text-xs text-gray-600 italic line-clamp-3">&ldquo;{search.queryText}&rdquo;</p>
-        ) : (
-          <div className="text-xs text-gray-600">
-            <span className="font-medium text-gray-700">Seeds: </span>
-            {(search.seedCompanies ?? []).join(", ")}
-            {search.queryText && (
-              <p className="mt-0.5 italic">&ldquo;{search.queryText}&rdquo;</p>
-            )}
-          </div>
-        )}
+        <QuerySummary search={search} />
       </div>
 
       {/* agent note / error */}
@@ -899,7 +1242,7 @@ function PastSearches({
               <StatusBadge status={s.status} compact />
               <span className="text-sm font-medium text-gray-800 truncate">{s.name}</span>
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 uppercase tracking-wide">
-                {s.mode === "icp" ? "ICP" : "Look-alike"}
+                {modeLabel(s.mode, s.directoryConfig?.source)}
               </span>
             </div>
             <div className="flex items-center gap-3 text-[11px] text-cloudy tabular whitespace-nowrap">
@@ -911,6 +1254,64 @@ function PastSearches({
         ))}
       </div>
     </div>
+  );
+}
+
+function modeLabel(mode: DiscoveryMode, source?: DirectorySource): string {
+  switch (mode) {
+    case "icp":
+      return "ICP search";
+    case "lookalike":
+      return "Look-alike";
+    case "signal_funding":
+      return "Funding signal";
+    case "signal_hiring":
+      return "Hiring signal";
+    case "signal_news":
+      return "News signal";
+    case "directory":
+      return source ? `Directory · ${DIRECTORY_META[source].label}` : "Directory";
+    default:
+      return mode;
+  }
+}
+
+function QuerySummary({ search }: { search: DiscoverySearch }) {
+  if (search.mode === "lookalike") {
+    return (
+      <div className="text-xs text-gray-600">
+        <span className="font-medium text-gray-700">Seeds: </span>
+        {(search.seedCompanies ?? []).join(", ")}
+        {search.queryText && (
+          <p className="mt-0.5 italic">&ldquo;{search.queryText}&rdquo;</p>
+        )}
+      </div>
+    );
+  }
+  if (search.mode === "directory" && search.directoryConfig) {
+    const c = search.directoryConfig;
+    const bits: string[] = [DIRECTORY_META[c.source].label];
+    if (c.batch) bits.push(`batch ${c.batch}`);
+    if (c.category) bits.push(`category: ${c.category}`);
+    if (c.techStack) bits.push(`tech: ${c.techStack}`);
+    if (c.geo) bits.push(`geo: ${c.geo}`);
+    if (c.query) bits.push(`query: ${c.query}`);
+    if (c.url) bits.push(c.url);
+    return (
+      <div className="text-xs text-gray-600">
+        <span className="font-medium text-gray-700">Source: </span>
+        {bits.join(" · ")}
+        {search.queryText && (
+          <p className="mt-0.5 italic">&ldquo;{search.queryText}&rdquo;</p>
+        )}
+      </div>
+    );
+  }
+  // icp and signal modes both have a meaningful queryText
+  return (
+    <p className="text-xs text-gray-600 italic line-clamp-3">
+      &ldquo;{search.queryText}&rdquo;
+    </p>
   );
 }
 

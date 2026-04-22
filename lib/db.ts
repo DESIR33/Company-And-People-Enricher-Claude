@@ -114,6 +114,7 @@ function init(db: Database.Database): void {
       name TEXT NOT NULL,
       query_text TEXT NOT NULL,
       seed_companies TEXT,
+      directory_config TEXT,
       max_results INTEGER NOT NULL DEFAULT 25,
       status TEXT NOT NULL,
       created_at INTEGER NOT NULL,
@@ -176,6 +177,9 @@ function init(db: Database.Database): void {
   );
   if (!searchColumns.has("parent_monitor_id")) {
     db.exec(`ALTER TABLE discovery_searches ADD COLUMN parent_monitor_id TEXT`);
+  }
+  if (!searchColumns.has("directory_config")) {
+    db.exec(`ALTER TABLE discovery_searches ADD COLUMN directory_config TEXT`);
   }
   // Backfill new columns on pre-existing databases.
   const jobColumns = new Set(

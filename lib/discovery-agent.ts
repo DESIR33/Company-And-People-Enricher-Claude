@@ -1,5 +1,5 @@
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
-import type { DiscoveryMode } from "./discovery-store";
+import type { DirectoryConfig, DiscoveryMode } from "./discovery-store";
 
 export type SignalAgentConfig = {
   signalType: "funding" | "hiring" | "news";
@@ -39,6 +39,7 @@ type DiscoveryParams = {
   queryText: string;
   seedCompanies?: string[];
   signalConfig?: SignalAgentConfig;
+  directoryConfig?: DirectoryConfig;
   maxResults: number;
   signal?: AbortSignal;
   model?: string;
@@ -170,7 +171,140 @@ Workflow:
 Target: ${params.maxResults} companies with a fresh news signal.`;
 }
 
+function buildDirectoryUser(params: DiscoveryParams): string {
+  const cfg = params.directoryConfig!;
+  const extra = params.queryText.trim()
+    ? `\n\nAdditional ICP constraints: ${params.queryText.trim()}`
+    : "";
+
+  switch (cfg.source) {
+    case "yc": {
+      const filters: string[] = [];
+      if (cfg.batch) filters.push(`Batch: ${cfg.batch}`);
+      if (cfg.category) filters.push(`Category/industry: ${cfg.category}`);
+      if (cfg.query) filters.push(`Free-text: ${cfg.query}`);
+      const f = filters.length ? filters.join(" · ") : "(no filters — return a representative sample)";
+      return `Pull up to ${params.maxResults} Y Combinator companies from the YC directory.
+
+Filters: ${f}${extra}
+
+Workflow:
+1. Start at https://www.ycombinator.com/companies — there is a list with filters for batch, industry, location, and status.
+2. Apply the filters above. If the directory URL supports query params (e.g. ?batch=W24), prefer those.
+3. WebFetch the filtered results page. The YC directory is JS-heavy but the HTML skeleton usually contains company slugs and names.
+4. If fetching the directory fails, fall back to Google: site:ycombinator.com/companies/ <batch-or-category>.
+5. For each company: companyName, websiteUrl (from the YC profile page), and a matchReason that cites the batch and category.
+6. Skip YC's own internal pages or defunct companies.
+
+Target: ${params.maxResults} YC-listed companies.`;
+    }
+
+    case "producthunt": {
+      const filters: string[] = [];
+      if (cfg.category) filters.push(`Topic/category: ${cfg.category}`);
+      if (cfg.query) filters.push(`Free-text: ${cfg.query}`);
+      const f = filters.length ? filters.join(" · ") : "(no filters — most recent launches)";
+      return `Pull up to ${params.maxResults} Product Hunt launches that represent real, reachable companies.
+
+Filters: ${f}${extra}
+
+Workflow:
+1. Start at https://www.producthunt.com/topics/${encodeURIComponent(cfg.category ?? "")} or the launch feed if no topic is given.
+2. Prefer products with a distinct company behind them. Skip side projects and single-dev tools unless the ICP asks for them.
+3. For each launch, follow the external link to confirm the real company website.
+4. matchReason MUST include the launch date and what the product does in one phrase.
+5. Deduplicate — a company can appear in PH multiple times; return it once using the primary domain.
+
+Target: ${params.maxResults} companies with recent PH launches.`;
+    }
+
+    case "github": {
+      const filters: string[] = [];
+      if (cfg.category) filters.push(`Topic: ${cfg.category}`);
+      if (cfg.query) filters.push(`Free-text: ${cfg.query}`);
+      const f = filters.length ? filters.join(" · ") : "(no filters)";
+      return `Pull up to ${params.maxResults} companies that sponsor/maintain active GitHub repos matching the filters.
+
+Filters: ${f}${extra}
+
+Workflow:
+1. Start at https://github.com/topics/${encodeURIComponent(cfg.category ?? "")} (or search GitHub repos by query).
+2. Focus on repos with a commercial org behind them — look at the org profile page for a website, LinkedIn, or "company" indicator.
+3. Skip individual-developer repos unless the ICP specifically targets solo maintainers.
+4. For each commercial org, return one row with companyName, websiteUrl (from the org profile), and matchReason citing the repo + stars.
+5. Dedupe by domain — one company per row even if they own multiple repos.
+
+Target: ${params.maxResults} companies behind relevant GitHub projects.`;
+    }
+
+    case "google_maps": {
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = cfg.geo ?? "(none)";
+      return `Pull up to ${params.maxResults} local businesses from Google Maps.
+
+Category: ${category}
+Geography: ${geo}${extra}
+
+Workflow:
+1. Query https://www.google.com/maps/search/ with "<category> in <geo>".
+2. Also try Google Search: "<category>" "<geo>" site:google.com/maps OR just "<category> <geo>".
+3. Prefer businesses with a verified Google Business Profile, real website, and recent reviews.
+4. Skip franchise locations of the same parent — return the parent brand once.
+5. For each: companyName, websiteUrl, location (specific address if available), matchReason citing the Google listing.
+
+Target: ${params.maxResults} local businesses.`;
+    }
+
+    case "tech_stack": {
+      const tech = cfg.techStack ?? cfg.query ?? "(unspecified tech)";
+      const extraFilters: string[] = [];
+      if (cfg.category) extraFilters.push(`Industry: ${cfg.category}`);
+      if (cfg.geo) extraFilters.push(`Geography: ${cfg.geo}`);
+      const f = extraFilters.length ? extraFilters.join(" · ") : "(no additional filters)";
+      return `Pull up to ${params.maxResults} companies that use ${tech} in their stack.
+
+Additional filters: ${f}${extra}
+
+Workflow:
+1. Look at public signals of usage:
+   - BuiltWith public "${tech} customers" pages or Google search: "${tech}" "customers" OR "case study"
+   - The vendor's own customer logo wall / case-study page.
+   - G2 / Capterra reviews of "${tech}" — the reviewers' companies show the tech in use.
+   - Job postings requiring "${tech}" experience indicate it's part of their stack.
+2. matchReason MUST cite the source of evidence — e.g. "Listed on Shopify Plus customers page" or "Case study published 2026-01-15".
+3. Prefer evidence that is less than 2 years old — tech stacks churn.
+4. Dedupe by domain.
+
+Target: ${params.maxResults} companies visibly using ${tech}.`;
+    }
+
+    case "custom": {
+      const url = cfg.url ?? "(no URL provided)";
+      const hint = cfg.query ?? "";
+      return `Extract up to ${params.maxResults} companies from this directory URL: ${url}
+
+Extraction hint: ${hint || "(none — extract all companies listed)"}${extra}
+
+Workflow:
+1. WebFetch ${url}. Parse the companies listed on the page.
+2. If the directory paginates (?page=2 etc.), fetch additional pages up to ${params.maxResults} total.
+3. For each entry: capture companyName and websiteUrl. If the directory includes industry/location, capture those too.
+4. matchReason MUST cite that it came from this directory and the specific row/position if possible.
+5. If the URL is behind auth or returns a login wall, report that honestly and return an empty list.
+
+Target: ${params.maxResults} companies from the directory.`;
+    }
+  }
+}
+
 function buildPrompts(params: DiscoveryParams): { system: string; user: string } {
+  if (params.mode === "directory") {
+    if (!params.directoryConfig) {
+      throw new Error("directoryConfig is required for directory mode");
+    }
+    return { system: COMMON_SYSTEM, user: buildDirectoryUser(params) };
+  }
+
   if (
     params.mode === "signal_funding" ||
     params.mode === "signal_hiring" ||

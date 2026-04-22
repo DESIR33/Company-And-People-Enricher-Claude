@@ -7,6 +7,7 @@ import {
   insertLead,
   setSearchAbort,
   updateSearch,
+  type DirectoryConfig,
   type DiscoveryMode,
 } from "./discovery-store";
 import { capStatus, getCurrentUsage, recordUsage } from "./usage-store";
@@ -38,6 +39,7 @@ export async function executeSearch(
       queryText: init.queryText,
       seedCompanies: init.seedCompanies,
       signalConfig: opts.signalConfig,
+      directoryConfig: init.directoryConfig,
       maxResults: init.maxResults,
       signal: abort.signal,
       onLog: (line) => appendDiscoveryLog(searchId, line),
@@ -96,6 +98,7 @@ export function startSearch(params: {
   name: string;
   queryText: string;
   seedCompanies?: string[];
+  directoryConfig?: DirectoryConfig;
   maxResults: number;
 }): StartSearchResult {
   const usage = getCurrentUsage();
@@ -112,6 +115,7 @@ export function startSearch(params: {
     name: params.name,
     queryText: params.queryText,
     seedCompanies: params.seedCompanies,
+    directoryConfig: params.directoryConfig,
     maxResults: params.maxResults,
   });
 

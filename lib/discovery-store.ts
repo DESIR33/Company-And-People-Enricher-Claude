@@ -6,7 +6,26 @@ export type DiscoveryMode =
   | "lookalike"
   | "signal_funding"
   | "signal_hiring"
-  | "signal_news";
+  | "signal_news"
+  | "directory";
+
+export type DirectorySource =
+  | "yc"
+  | "producthunt"
+  | "github"
+  | "google_maps"
+  | "tech_stack"
+  | "custom";
+
+export type DirectoryConfig = {
+  source: DirectorySource;
+  category?: string;
+  query?: string;
+  geo?: string;
+  url?: string;
+  techStack?: string;
+  batch?: string;
+};
 
 export type DiscoveryStatus =
   | "queued"
@@ -21,6 +40,7 @@ export type DiscoverySearch = {
   name: string;
   queryText: string;
   seedCompanies?: string[];
+  directoryConfig?: DirectoryConfig;
   maxResults: number;
   status: DiscoveryStatus;
   createdAt: number;
@@ -57,6 +77,7 @@ type SearchRow = {
   name: string;
   query_text: string;
   seed_companies: string | null;
+  directory_config: string | null;
   max_results: number;
   status: DiscoveryStatus;
   created_at: number;
@@ -94,6 +115,7 @@ function searchFromRow(r: SearchRow): DiscoverySearch {
     name: r.name,
     queryText: r.query_text,
     seedCompanies: r.seed_companies ? JSON.parse(r.seed_companies) : undefined,
+    directoryConfig: r.directory_config ? JSON.parse(r.directory_config) : undefined,
     maxResults: r.max_results,
     status: r.status,
     createdAt: r.created_at,
@@ -132,6 +154,7 @@ export function createSearch(params: {
   name: string;
   queryText: string;
   seedCompanies?: string[];
+  directoryConfig?: DirectoryConfig;
   maxResults: number;
   parentMonitorId?: string;
 }): DiscoverySearch {
@@ -140,9 +163,9 @@ export function createSearch(params: {
   const now = Date.now();
   db.prepare(
     `INSERT INTO discovery_searches (
-      id, mode, name, query_text, seed_companies, max_results, status,
+      id, mode, name, query_text, seed_companies, directory_config, max_results, status,
       created_at, updated_at, parent_monitor_id
-    ) VALUES (@id, @mode, @name, @queryText, @seedCompanies, @maxResults, 'queued',
+    ) VALUES (@id, @mode, @name, @queryText, @seedCompanies, @directoryConfig, @maxResults, 'queued',
               @now, @now, @parentMonitorId)`
   ).run({
     id,
@@ -151,6 +174,9 @@ export function createSearch(params: {
     queryText: params.queryText,
     seedCompanies: params.seedCompanies?.length
       ? JSON.stringify(params.seedCompanies)
+      : null,
+    directoryConfig: params.directoryConfig
+      ? JSON.stringify(params.directoryConfig)
       : null,
     maxResults: params.maxResults,
     parentMonitorId: params.parentMonitorId ?? null,

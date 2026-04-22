@@ -27,7 +27,39 @@ const LookalikeSchema = z.object({
   maxResults: z.number().int().min(1).max(MAX_RESULTS_LIMIT).default(25),
 });
 
-const CreateSearchSchema = z.discriminatedUnion("mode", [IcpSchema, LookalikeSchema]);
+const DirectoryConfigSchema = z
+  .object({
+    source: z.enum(["yc", "producthunt", "github", "google_maps", "tech_stack", "custom"]),
+    category: z.string().trim().max(200).optional(),
+    query: z.string().trim().max(500).optional(),
+    geo: z.string().trim().max(200).optional(),
+    url: z.string().trim().url().max(500).optional(),
+    techStack: z.string().trim().max(200).optional(),
+    batch: z.string().trim().max(40).optional(),
+  })
+  .refine(
+    (v) => {
+      if (v.source === "custom") return !!v.url;
+      if (v.source === "google_maps") return !!(v.category || v.query);
+      if (v.source === "tech_stack") return !!(v.techStack || v.query);
+      return true;
+    },
+    { message: "Directory config is missing required fields for the chosen source" }
+  );
+
+const DirectorySchema = z.object({
+  mode: z.literal("directory"),
+  name: z.string().trim().min(1).max(120),
+  directoryConfig: DirectoryConfigSchema,
+  queryText: z.string().trim().max(2000).default(""),
+  maxResults: z.number().int().min(1).max(MAX_RESULTS_LIMIT).default(25),
+});
+
+const CreateSearchSchema = z.discriminatedUnion("mode", [
+  IcpSchema,
+  LookalikeSchema,
+  DirectorySchema,
+]);
 
 export async function GET() {
   return NextResponse.json({ searches: listSearches() });
@@ -58,6 +90,7 @@ export async function POST(request: NextRequest) {
     name: data.name,
     queryText: data.queryText,
     seedCompanies: data.mode === "lookalike" ? data.seedCompanies : undefined,
+    directoryConfig: data.mode === "directory" ? data.directoryConfig : undefined,
     maxResults: data.maxResults,
   });
 
