@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { useRouter, useParams } from "next/navigation";
 import Papa from "papaparse";
-import { getFieldGroups } from "@/lib/enrichment-fields";
+import { getFieldGroups, LEAD_SCORE_REQUIRED_FIELDS } from "@/lib/enrichment-fields";
 import {
   Upload,
   FileSpreadsheet,
@@ -12,6 +12,7 @@ import {
   Building2,
   Users,
   UserSearch,
+  Target,
   Plus,
   X,
 } from "lucide-react";
@@ -21,14 +22,16 @@ import { clsx } from "clsx";
 import Image from "next/image";
 
 const MAX_ROWS = 200;
+const MAX_ROWS_LEAD_SCORE = 500;
 
 const TABS = [
   { type: "company"         as const, label: "Company",        icon: Building2 },
   { type: "people"          as const, label: "People",         icon: Users },
   { type: "decision_maker"  as const, label: "Decision Maker", icon: UserSearch },
+  { type: "lead_score"      as const, label: "Lead Score",     icon: Target },
 ];
 
-type EnrichType = "company" | "people" | "decision_maker";
+type EnrichType = "company" | "people" | "decision_maker" | "lead_score";
 
 const TIMEFRAME_OPTIONS = [
   { value: "last 30 days",   label: "Last 30 days" },
@@ -43,8 +46,10 @@ export default function EnrichPage() {
   const params    = useParams();
   const type      = params.type as EnrichType;
   const router    = useRouter();
-  const isCompany = type === "company";
-  const isDM      = type === "decision_maker";
+  const isCompany    = type === "company";
+  const isDM         = type === "decision_maker";
+  const isLeadScore  = type === "lead_score";
+  const maxRows      = isLeadScore ? MAX_ROWS_LEAD_SCORE : MAX_ROWS;
 
   const [csvContent,       setCsvContent]       = useState("");
   const [fileName,         setFileName]         = useState("");
@@ -63,6 +68,14 @@ export default function EnrichPage() {
 
   // Outreach first-line context
   const [outreachContext, setOutreachContext] = useState("");
+
+  // Lead score rubric (only used for lead_score type)
+  const [icpCriteria,   setIcpCriteria]   = useState("");
+  const [painSignals,   setPainSignals]   = useState("");
+  const [reachability,  setReachability]  = useState("");
+  const [weightIcp,     setWeightIcp]     = useState(40);
+  const [weightPain,    setWeightPain]    = useState(35);
+  const [weightReach,   setWeightReach]   = useState(25);
 
   // Add field modal
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -85,6 +98,12 @@ export default function EnrichPage() {
     setNewsCount(3);
     setNewsTimeframe("last 3 months");
     setOutreachContext("");
+    setIcpCriteria("");
+    setPainSignals("");
+    setReachability("");
+    setWeightIcp(40);
+    setWeightPain(35);
+    setWeightReach(25);
     setError("");
   };
 
@@ -109,8 +128,8 @@ export default function EnrichPage() {
       const cols  = parsed.meta.fields ?? [];
       const count = parsed.data.length;
 
-      if (count > MAX_ROWS) {
-        setError(`This file has ${count} rows — the maximum is ${MAX_ROWS}. Trim your CSV and try again.`);
+      if (count > maxRows) {
+        setError(`This file has ${count} rows — the maximum is ${maxRows}. Trim your CSV and try again.`);
         setCsvContent("");
         setHeaders([]);
         setRowCount(0);
@@ -123,7 +142,7 @@ export default function EnrichPage() {
       setRowCount(count);
     };
     reader.readAsText(file);
-  }, []);
+  }, [maxRows]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -134,13 +153,12 @@ export default function EnrichPage() {
   const toggleField = (key: string) =>
     setSelectedFields((p) => p.includes(key) ? p.filter((f) => f !== key) : [...p, key]);
 
-  const allStandardSelected = allFields.filter((f) => !f.isParameterized).every((f) => selectedFields.includes(f.key));
+  const selectableFields = allFields.filter(
+    (f) => !f.isParameterized && !(isLeadScore && LEAD_SCORE_REQUIRED_FIELDS.includes(f.key))
+  );
+  const allStandardSelected = selectableFields.every((f) => selectedFields.includes(f.key));
   const toggleAll = () =>
-    setSelectedFields(
-      allStandardSelected
-        ? []
-        : allFields.filter((f) => !f.isParameterized).map((f) => f.key)
-    );
+    setSelectedFields(allStandardSelected ? [] : selectableFields.map((f) => f.key));
 
   const removeCustomField = (name: string) =>
     setCustomFields((prev) => prev.filter((f) => f.name !== name));
@@ -169,13 +187,24 @@ export default function EnrichPage() {
   };
 
   const newsFieldCount = newsSelected ? newsCount : 0;
-  const totalFieldCount = selectedFields.length + customFields.length + newsFieldCount;
+  const leadScoreForcedFieldCount = isLeadScore
+    ? LEAD_SCORE_REQUIRED_FIELDS.filter((f) => !selectedFields.includes(f)).length
+    : 0;
+  const totalFieldCount = selectedFields.length + customFields.length + newsFieldCount + leadScoreForcedFieldCount;
+
+  const weightsSum = weightIcp + weightPain + weightReach;
+  const weightsValid = weightsSum === 100;
 
   const handleSubmit = async () => {
     if (!csvContent)       return setError("No CSV loaded — drop a file above to get started.");
     if (!identifierColumn) return setError("Pick the column that contains the identifier.");
-    if (!selectedFields.length && !customFields.length && !newsSelected)
+    if (!isLeadScore && !selectedFields.length && !customFields.length && !newsSelected)
       return setError("Select at least one field to enrich.");
+
+    if (isLeadScore) {
+      if (!icpCriteria.trim()) return setError("Define your ICP criteria before scoring — that's the anchor for the whole rubric.");
+      if (!weightsValid)       return setError(`Weights must sum to 100 (currently ${weightsSum}).`);
+    }
 
     // Expand recent_news into individual keys
     const newsKeys = newsSelected
@@ -199,6 +228,14 @@ export default function EnrichPage() {
             selectedFields.includes("first_line") && outreachContext.trim().length > 0
               ? outreachContext.trim()
               : undefined,
+          scoreRubric: isLeadScore
+            ? {
+                icpCriteria:  icpCriteria.trim(),
+                painSignals:  painSignals.trim(),
+                reachability: reachability.trim(),
+                weights: { icp: weightIcp, pain: weightPain, reach: weightReach },
+              }
+            : undefined,
         }),
       });
       const data = await res.json();
@@ -224,10 +261,12 @@ export default function EnrichPage() {
       {/* Animated heading */}
       <div className="space-y-2 py-2">
         <div className="flex items-baseline gap-3 overflow-hidden">
-          <span className="text-3xl font-serif font-bold text-gray-900 tracking-tight">Enrich</span>
+          <span className="text-3xl font-serif font-bold text-gray-900 tracking-tight">
+            {isLeadScore ? "Score" : "Enrich"}
+          </span>
           <TextRotate
-            texts={["Company", "People", "Decision Maker"]}
-            initialIndex={isCompany ? 0 : isDM ? 2 : 1}
+            texts={["Company", "People", "Decision Maker", "Lead Score"]}
+            initialIndex={isCompany ? 0 : isDM ? 2 : isLeadScore ? 3 : 1}
             auto={false}
             animatePresenceInitial={true}
             splitBy="characters"
@@ -302,7 +341,7 @@ export default function EnrichPage() {
                   <p className="text-sm text-gray-600">
                     <span className="font-medium text-brand-500">Click to upload</span> or drag and drop
                   </p>
-                  <p className="text-xs text-cloudy mt-0.5">CSV files only · up to {MAX_ROWS} rows</p>
+                  <p className="text-xs text-cloudy mt-0.5">CSV files only · up to {maxRows} rows</p>
                 </div>
               </div>
             )}
@@ -311,7 +350,7 @@ export default function EnrichPage() {
           {headers.length > 0 && csvContent && (
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                {isCompany
+                {isCompany || isLeadScore
                   ? "Which column contains the company URL?"
                   : isDM
                   ? "Which column contains the business name?"
@@ -336,10 +375,117 @@ export default function EnrichPage() {
         </div>
       </div>
 
+      {/* Lead score rubric card */}
+      {isLeadScore && (
+        <div className="bg-white rounded-xl border border-cloudy/30 overflow-hidden">
+          <div className="px-6 py-4 border-b border-cloudy/20">
+            <h2 className="text-sm font-semibold text-gray-700">Scoring rubric</h2>
+            <p className="text-xs text-cloudy mt-1">
+              Define what a great lead looks like. The agent applies this rubric to every row and returns ICP Fit, Pain Signal, and Reachability scores with an explanation — then sorts them so you can work the top 50.
+            </p>
+          </div>
+          <div className="p-6 space-y-5">
+            <div className="space-y-1.5">
+              <div className="flex items-baseline justify-between">
+                <label htmlFor="icp-criteria" className="text-sm font-medium text-gray-800">
+                  ICP fit criteria <span className="text-red-500">*</span>
+                </label>
+                <span className="text-xs text-cloudy">{icpCriteria.length}/1000</span>
+              </div>
+              <p className="text-xs text-cloudy">
+                Who is the ideal customer? Industry, size, geography, funding stage, segment — whatever matters. Specific &gt; generic.
+              </p>
+              <textarea
+                id="icp-criteria"
+                value={icpCriteria}
+                onChange={(e) => setIcpCriteria(e.target.value.slice(0, 1000))}
+                rows={3}
+                placeholder="e.g. Series A–B B2B SaaS companies in martech or salestech, 50–500 employees, HQ in US/EU, selling to mid-market."
+                className="w-full border border-cloudy/40 rounded-md px-3 py-2 text-sm placeholder:text-cloudy/70 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition resize-y"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-baseline justify-between">
+                <label htmlFor="pain-signals" className="text-sm font-medium text-gray-800">
+                  Pain signals <span className="text-cloudy font-normal">(optional)</span>
+                </label>
+                <span className="text-xs text-cloudy">{painSignals.length}/1000</span>
+              </div>
+              <p className="text-xs text-cloudy">
+                What observable evidence suggests they might be ready to buy? Hiring surges, funding, tech migrations, public complaints, growth markers.
+              </p>
+              <textarea
+                id="pain-signals"
+                value={painSignals}
+                onChange={(e) => setPainSignals(e.target.value.slice(0, 1000))}
+                rows={3}
+                placeholder="e.g. Actively hiring SDRs or RevOps, raised in the last 12 months, expanding internationally, migrating from HubSpot to Salesforce, CEO/VP posting on LinkedIn about scaling the GTM team."
+                className="w-full border border-cloudy/40 rounded-md px-3 py-2 text-sm placeholder:text-cloudy/70 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition resize-y"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-baseline justify-between">
+                <label htmlFor="reachability" className="text-sm font-medium text-gray-800">
+                  Reachability preferences <span className="text-cloudy font-normal">(optional)</span>
+                </label>
+                <span className="text-xs text-cloudy">{reachability.length}/1000</span>
+              </div>
+              <p className="text-xs text-cloudy">
+                Which contact paths matter to you? Named decision makers with active LinkedIn, public email, warm introducers — whatever makes a lead actually workable.
+              </p>
+              <textarea
+                id="reachability"
+                value={reachability}
+                onChange={(e) => setReachability(e.target.value.slice(0, 1000))}
+                rows={3}
+                placeholder="e.g. Prefer named VP Sales / VP Marketing / Head of RevOps with an active personal LinkedIn and a public email on the company site. Avoid info@ only."
+                className="w-full border border-cloudy/40 rounded-md px-3 py-2 text-sm placeholder:text-cloudy/70 focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition resize-y"
+              />
+            </div>
+
+            {/* Weights */}
+            <div className="space-y-2">
+              <div className="flex items-baseline justify-between">
+                <label className="text-sm font-medium text-gray-800">Weights</label>
+                <span className={clsx("text-xs", weightsValid ? "text-cloudy" : "text-red-500 font-medium")}>
+                  {weightsValid ? "Sums to 100" : `Must sum to 100 (currently ${weightsSum})`}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: "ICP Fit",      value: weightIcp,   set: setWeightIcp },
+                  { label: "Pain Signal",  value: weightPain,  set: setWeightPain },
+                  { label: "Reachability", value: weightReach, set: setWeightReach },
+                ].map(({ label, value, set }) => (
+                  <div key={label} className="flex flex-col gap-1">
+                    <span className="text-[11px] font-medium text-cloudy uppercase tracking-wider">{label}</span>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={value}
+                        onChange={(e) => set(Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
+                        className="w-full border border-cloudy/40 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                      />
+                      <span className="text-xs text-cloudy">%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Fields card */}
       <div className="bg-white rounded-xl border border-cloudy/30 overflow-hidden">
         <div className="px-6 py-4 border-b border-cloudy/20 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-700">Choose fields to enrich</h2>
+          <h2 className="text-sm font-semibold text-gray-700">
+            {isLeadScore ? "Optional extra fields" : "Choose fields to enrich"}
+          </h2>
           <button
             onClick={toggleAll}
             className="text-xs text-brand-500 hover:text-brand-600 font-medium transition-colors"
@@ -348,7 +494,19 @@ export default function EnrichPage() {
           </button>
         </div>
         <div className="p-6 space-y-5">
-          {fieldGroups.map((group) => (
+          {isLeadScore && (
+            <div className="rounded-lg border border-brand-200 bg-brand-50/60 px-3 py-2.5">
+              <p className="text-xs font-medium text-gray-800">
+                Scoring fields are always included:
+              </p>
+              <p className="text-[11px] text-cloudy mt-1 leading-relaxed">
+                ICP Fit, Pain Signal, Reachability (scores + reasoning), Total Score, Priority Tier, and a human-readable Explanation column. Pick extra snapshot fields below if you want more context next to each score.
+              </p>
+            </div>
+          )}
+          {fieldGroups
+            .filter((group) => !(isLeadScore && group.label === "Lead Score"))
+            .map((group) => (
             <div key={group.label}>
               <p className="text-[11px] font-semibold text-cloudy uppercase tracking-wider mb-2">{group.label}</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -562,11 +720,19 @@ export default function EnrichPage() {
       <div className="flex items-center gap-4 pb-8">
         <StarButton
           onClick={handleSubmit}
-          disabled={!csvContent || isSubmitting}
+          disabled={
+            !csvContent ||
+            isSubmitting ||
+            (isLeadScore && (!icpCriteria.trim() || !weightsValid))
+          }
           loading={isSubmitting}
           label={
             isSubmitting
               ? "Starting…"
+              : isLeadScore
+              ? totalFieldCount > 0
+                ? `Score & prioritize · ${totalFieldCount} field${totalFieldCount !== 1 ? "s" : ""}`
+                : "Score & prioritize"
               : totalFieldCount > 0
               ? `Start enrichment · ${totalFieldCount} field${totalFieldCount !== 1 ? "s" : ""}`
               : "Start enrichment"

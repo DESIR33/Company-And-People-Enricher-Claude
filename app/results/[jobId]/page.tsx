@@ -24,6 +24,7 @@ import {
   Building2,
   Users,
   UserSearch,
+  Target,
   StopCircle,
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -44,7 +45,7 @@ type JobRow = {
 
 type JobData = {
   jobId: string;
-  type: "company" | "people" | "decision_maker";
+  type: "company" | "people" | "decision_maker" | "lead_score";
   status: "pending" | "processing" | "completed" | "failed" | "cancelled";
   totalRows: number;
   processedRows: number;
@@ -54,6 +55,18 @@ type JobData = {
   rows: JobRow[];
   error?: string;
 };
+
+const TOP_N = 50;
+
+function tierBadgeClasses(tier: string): string {
+  switch (tier.toUpperCase()) {
+    case "A": return "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200";
+    case "B": return "bg-blue-100 text-blue-700 ring-1 ring-blue-200";
+    case "C": return "bg-amber-100 text-amber-700 ring-1 ring-amber-200";
+    case "D": return "bg-gray-100 text-gray-600 ring-1 ring-gray-200";
+    default:  return "bg-gray-100 text-gray-500 ring-1 ring-gray-200";
+  }
+}
 
 const MODEL_OPTIONS = [
   { label: "Haiku 4.5 (default)", value: "claude-haiku-4-5-20251001" },
@@ -83,6 +96,7 @@ export default function ResultsPage() {
   const [cancelling,   setCancelling]   = useState(false);
   const [retryingRows, setRetryingRows] = useState<Set<number>>(new Set());
   const [retryModel,   setRetryModel]   = useState<Record<number, string>>({});
+  const [showTopOnly,  setShowTopOnly]  = useState(true);
 
   useEffect(() => {
     if (!jobId) return;
@@ -181,9 +195,11 @@ export default function ResultsPage() {
     }
   }, [jobData, jobId, cancelling]);
 
+  const isLeadScore = jobData?.type === "lead_score";
+
   const tableData = useMemo(() => {
     if (!jobData) return [];
-    return jobData.rows.map((row) => ({
+    const rows: Record<string, string>[] = jobData.rows.map((row) => ({
       _rowIndex: String(row.rowIndex),
       _status:   row.status,
       _error:    row.error ?? "",
@@ -191,7 +207,21 @@ export default function ResultsPage() {
       ...row.originalData,
       ...row.enrichedData,
     }));
-  }, [jobData]);
+
+    if (isLeadScore) {
+      const scoreOf = (r: Record<string, string>) => {
+        if (r._status !== "done") return -1;
+        const n = Number(r.total_score);
+        return Number.isFinite(n) ? n : -1;
+      };
+      rows.sort((a, b) => scoreOf(b) - scoreOf(a));
+      rows.forEach((r, i) => {
+        r._rank = scoreOf(r) >= 0 ? String(i + 1) : "";
+      });
+      if (showTopOnly) return rows.slice(0, TOP_N);
+    }
+    return rows;
+  }, [jobData, isLeadScore, showTopOnly]);
 
 
   const columns = useMemo<ColumnDef<Record<string, string>>[]>(() => {
@@ -212,6 +242,17 @@ export default function ResultsPage() {
       ),
     };
 
+    const rankCol: ColumnDef<Record<string, string>> = {
+      id: "_rank", header: "#", accessorKey: "_rank", size: 52,
+      enableSorting: false, enableGlobalFilter: false,
+      cell: ({ getValue }) => {
+        const v = getValue() as string;
+        return v
+          ? <span className="text-cloudy text-xs tabular-nums font-medium">{v}</span>
+          : <span className="text-cloudy/40 text-xs">—</span>;
+      },
+    };
+
     const originalCols: ColumnDef<Record<string, string>>[] = originalHeaders.map((h) => ({
       id: h, header: toTitleCase(h), accessorKey: h,
       cell: ({ getValue }) => {
@@ -219,6 +260,8 @@ export default function ResultsPage() {
         return <span className="text-cloudy text-xs tabular truncate block max-w-48" title={v}>{v || "—"}</span>;
       },
     }));
+
+    const SCORE_FIELDS = new Set(["icp_fit_score", "pain_signal_score", "reachability_score", "total_score"]);
 
     const enrichedCols: ColumnDef<Record<string, string>>[] = jobData.requestedFields.map((key) => ({
       id: `e_${key}`,
@@ -229,6 +272,44 @@ export default function ResultsPage() {
         const status = row.original._status as RowStatus;
         if (status === "pending" || status === "processing")
           return <span className="text-cloudy/40 text-xs">—</span>;
+
+        // Numeric score — render as a colored pill.
+        if (SCORE_FIELDS.has(key) && v) {
+          const num = Number(v);
+          if (Number.isFinite(num)) {
+            const color =
+              key === "total_score"
+                ? num >= 80 ? "bg-emerald-100 text-emerald-700"
+                : num >= 65 ? "bg-blue-100 text-blue-700"
+                : num >= 45 ? "bg-amber-100 text-amber-700"
+                :             "bg-gray-100 text-gray-600"
+                : "bg-brand-50 text-brand-700";
+            return (
+              <span className={clsx(
+                "inline-flex items-center justify-center min-w-9 px-1.5 py-0.5 rounded-md text-xs font-semibold tabular-nums",
+                color
+              )}>
+                {num}
+              </span>
+            );
+          }
+        }
+
+        if (key === "priority_tier" && v) {
+          return (
+            <span className={clsx(
+              "inline-flex items-center justify-center w-6 h-6 rounded-md text-[11px] font-bold",
+              tierBadgeClasses(v)
+            )}>
+              {v.toUpperCase()}
+            </span>
+          );
+        }
+
+        if (key === "score_explanation" && v) {
+          return <span className="text-gray-900 text-xs tabular truncate block max-w-96" title={v}>{v}</span>;
+        }
+
         return v
           ? <span className="text-gray-900 text-xs tabular truncate block max-w-48 font-medium" title={v}>{v}</span>
           : <span className="text-cloudy/40 text-xs">—</span>;
@@ -293,8 +374,9 @@ export default function ResultsPage() {
       },
     };
 
-    return [statusCol, ...originalCols, ...enrichedCols, costCol, retryCol];
-  }, [jobData, retryingRows, retryModel, handleRetry]);
+    const leadCols = isLeadScore ? [rankCol] : [];
+    return [statusCol, ...leadCols, ...originalCols, ...enrichedCols, costCol, retryCol];
+  }, [jobData, retryingRows, retryModel, handleRetry, isLeadScore]);
 
   const table = useReactTable({
     data: tableData, columns,
@@ -333,12 +415,14 @@ export default function ResultsPage() {
   const doneCount  = jobData.rows.filter((r) => r.status === "done").length;
   const errorCount = jobData.rows.filter((r) => r.status === "error").length;
   const TypeIcon   =
-    jobData.type === "company" ? Building2
-    : jobData.type === "people" ? Users
+    jobData.type === "company"        ? Building2
+    : jobData.type === "people"       ? Users
+    : jobData.type === "lead_score"   ? Target
     : UserSearch;
   const typeLabel  =
-    jobData.type === "company" ? "Company"
-    : jobData.type === "people" ? "People"
+    jobData.type === "company"        ? "Company"
+    : jobData.type === "people"       ? "People"
+    : jobData.type === "lead_score"   ? "Lead Score"
     : "Decision Maker";
 
   const cacheReadTotal     = jobData.rows.reduce((s, r) => s + (r.cacheReadTokens ?? 0), 0);
@@ -364,7 +448,9 @@ export default function ResultsPage() {
             <TypeIcon className="w-4 h-4 text-brand-500" strokeWidth={2} />
           </div>
           <div className="min-w-0">
-            <h1 className="text-base font-semibold text-gray-900">{typeLabel} Enrichment — Results</h1>
+            <h1 className="text-base font-semibold text-gray-900">
+              {isLeadScore ? "Lead Score — Prioritized Results" : `${typeLabel} Enrichment — Results`}
+            </h1>
             <div className="flex items-center gap-2 mt-0.5">
               {isComplete ? (
                 <>
@@ -440,8 +526,34 @@ export default function ResultsPage() {
             className="bg-pampas border border-cloudy/30 rounded-lg pl-8 pr-3 py-1.5 text-sm text-gray-900 placeholder:text-cloudy focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent w-56 transition"
           />
         </div>
+
+        {isLeadScore && jobData.totalRows > TOP_N && (
+          <div className="flex items-center gap-1 bg-pampas border border-cloudy/30 rounded-lg p-0.5">
+            <button
+              onClick={() => setShowTopOnly(true)}
+              className={clsx(
+                "px-3 py-1 rounded-md text-xs font-medium transition-all",
+                showTopOnly ? "bg-white text-gray-900 shadow-sm" : "text-cloudy hover:text-gray-700"
+              )}
+            >
+              Top {TOP_N}
+            </button>
+            <button
+              onClick={() => setShowTopOnly(false)}
+              className={clsx(
+                "px-3 py-1 rounded-md text-xs font-medium transition-all",
+                !showTopOnly ? "bg-white text-gray-900 shadow-sm" : "text-cloudy hover:text-gray-700"
+              )}
+            >
+              All {jobData.totalRows}
+            </button>
+          </div>
+        )}
+
         <span className="text-xs text-cloudy ml-auto">
-          {table.getFilteredRowModel().rows.length} of {jobData.totalRows} rows
+          {isLeadScore && showTopOnly && jobData.totalRows > TOP_N
+            ? `Top ${table.getFilteredRowModel().rows.length} of ${jobData.totalRows} rows`
+            : `${table.getFilteredRowModel().rows.length} of ${jobData.totalRows} rows`}
         </span>
       </div>
 

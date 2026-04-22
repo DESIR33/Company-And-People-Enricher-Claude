@@ -4,6 +4,13 @@ import { disposeJobBus, getJobBus } from "./job-events";
 
 export type CustomFieldDef = { name: string; description: string };
 
+export type ScoreRubric = {
+  icpCriteria: string;
+  painSignals: string;
+  reachability: string;
+  weights: { icp: number; pain: number; reach: number };
+};
+
 export type EnrichmentRow = {
   rowIndex: number;
   originalData: Record<string, string>;
@@ -17,7 +24,7 @@ export type EnrichmentRow = {
 
 export type Job = {
   id: string;
-  type: "company" | "people" | "decision_maker";
+  type: "company" | "people" | "decision_maker" | "lead_score";
   status: "pending" | "processing" | "completed" | "failed" | "cancelled";
   createdAt: number;
   updatedAt: number;
@@ -26,6 +33,7 @@ export type Job = {
   customFieldDefs: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
   outreachContext?: string;
+  scoreRubric?: ScoreRubric;
   rows: EnrichmentRow[];
   totalRows: number;
   processedRows: number;
@@ -68,6 +76,7 @@ type JobMetaRow = {
   custom_field_defs: string;
   news_params: string | null;
   outreach_context: string | null;
+  score_rubric: string | null;
   total_rows: number;
   processed_rows: number;
   error: string | null;
@@ -98,6 +107,7 @@ function jobFromDb(meta: JobMetaRow, rows: JobRowRow[]): Job {
     customFieldDefs: JSON.parse(meta.custom_field_defs),
     newsParams: meta.news_params ? JSON.parse(meta.news_params) : undefined,
     outreachContext: meta.outreach_context ?? undefined,
+    scoreRubric: meta.score_rubric ? JSON.parse(meta.score_rubric) : undefined,
     rows: rows.map(rowFromDb),
     totalRows: meta.total_rows,
     processedRows: meta.processed_rows,
@@ -106,12 +116,13 @@ function jobFromDb(meta: JobMetaRow, rows: JobRowRow[]): Job {
 }
 
 export function createJob(params: {
-  type: "company" | "people" | "decision_maker";
+  type: "company" | "people" | "decision_maker" | "lead_score";
   identifierColumn: string;
   requestedFields: string[];
   customFieldDefs?: CustomFieldDef[];
   newsParams?: { count: number; timeframe: string };
   outreachContext?: string;
+  scoreRubric?: ScoreRubric;
   rows: Record<string, string>[];
 }): Job {
   const db = getDb();
@@ -121,9 +132,9 @@ export function createJob(params: {
 
   const insertMeta = db.prepare(`
     INSERT INTO jobs (id, type, status, created_at, updated_at, identifier_column,
-      requested_fields, custom_field_defs, news_params, outreach_context, total_rows, processed_rows)
+      requested_fields, custom_field_defs, news_params, outreach_context, score_rubric, total_rows, processed_rows)
     VALUES (@id, @type, 'pending', @now, @now, @identifierColumn,
-      @requestedFields, @customFieldDefs, @newsParams, @outreachContext, @totalRows, 0)
+      @requestedFields, @customFieldDefs, @newsParams, @outreachContext, @scoreRubric, @totalRows, 0)
   `);
   const insertRow = db.prepare(`
     INSERT INTO job_rows (job_id, row_index, original_data, enriched_data, status)
@@ -140,6 +151,7 @@ export function createJob(params: {
       customFieldDefs: JSON.stringify(customFieldDefs),
       newsParams: params.newsParams ? JSON.stringify(params.newsParams) : null,
       outreachContext: params.outreachContext?.trim() ? params.outreachContext.trim() : null,
+      scoreRubric: params.scoreRubric ? JSON.stringify(params.scoreRubric) : null,
       totalRows: params.rows.length,
     });
     for (let i = 0; i < params.rows.length; i++) {

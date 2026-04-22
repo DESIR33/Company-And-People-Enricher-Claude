@@ -10,9 +10,10 @@ import {
   clearJobAbortController,
 } from "@/lib/job-store";
 import { enrichRow } from "@/lib/enrich-row";
-import { getFields } from "@/lib/enrichment-fields";
+import { getFields, LEAD_SCORE_REQUIRED_FIELDS } from "@/lib/enrichment-fields";
 
 const MAX_ROWS = 200;
+const MAX_ROWS_LEAD_SCORE = 500;
 const CONCURRENCY = 15;
 const NEWS_KEY_RE = /^recent_news_\d+$/;
 const CUSTOM_FIELD_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 _\-/&]{0,99}$/;
@@ -36,8 +37,24 @@ const NewsParamsSchema = z.object({
   timeframe: z.string().min(1).max(50),
 });
 
+const ScoreRubricSchema = z.object({
+  icpCriteria:  z.string().trim().min(1, "ICP criteria is required").max(1000, "ICP criteria is too long"),
+  painSignals:  z.string().trim().max(1000, "Pain signals is too long").default(""),
+  reachability: z.string().trim().max(1000, "Reachability is too long").default(""),
+  weights: z
+    .object({
+      icp:   z.number().int().min(0).max(100),
+      pain:  z.number().int().min(0).max(100),
+      reach: z.number().int().min(0).max(100),
+    })
+    .refine(
+      (w) => w.icp + w.pain + w.reach === 100,
+      { message: "Weights must sum to 100" }
+    ),
+});
+
 const EnrichRequestSchema = z.object({
-  type: z.enum(["company", "people", "decision_maker"]),
+  type: z.enum(["company", "people", "decision_maker", "lead_score"]),
   csvContent: z.string().min(1, "csvContent is required"),
   identifierColumn: z.string().min(1, "identifierColumn is required"),
   requestedFields: z
@@ -47,6 +64,7 @@ const EnrichRequestSchema = z.object({
   customFieldDefs: z.array(CustomFieldDefSchema).max(50).optional().default([]),
   newsParams: NewsParamsSchema.optional(),
   outreachContext: z.string().trim().max(500, "outreachContext is too long").optional(),
+  scoreRubric: ScoreRubricSchema.optional(),
 });
 
 async function processJob(jobId: string): Promise<void> {
@@ -107,7 +125,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid request", issues }, { status: 400 });
   }
 
-  const { type, csvContent, identifierColumn, requestedFields, customFieldDefs, newsParams, outreachContext } = parsed.data;
+  const { type, csvContent, identifierColumn, requestedFields, customFieldDefs, newsParams, outreachContext, scoreRubric } = parsed.data;
+
+  if (type === "lead_score" && !scoreRubric) {
+    return NextResponse.json(
+      { error: "scoreRubric is required for lead_score jobs" },
+      { status: 400 }
+    );
+  }
 
   try {
     const { headers, rows } = parseCSV(csvContent);
@@ -121,9 +146,10 @@ export async function POST(request: NextRequest) {
     if (rows.length === 0) {
       return NextResponse.json({ error: "CSV has no data rows" }, { status: 400 });
     }
-    if (rows.length > MAX_ROWS) {
+    const rowCap = type === "lead_score" ? MAX_ROWS_LEAD_SCORE : MAX_ROWS;
+    if (rows.length > rowCap) {
       return NextResponse.json(
-        { error: `CSV has ${rows.length} rows. Maximum allowed is ${MAX_ROWS}.` },
+        { error: `CSV has ${rows.length} rows. Maximum allowed is ${rowCap}.` },
         { status: 400 }
       );
     }
@@ -173,7 +199,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const job = createJob({ type, identifierColumn, requestedFields, customFieldDefs, newsParams, outreachContext, rows });
+    // Lead-score jobs must always produce the full scoring payload so the
+    // priority view can sort and tier rows.
+    let finalRequestedFields = requestedFields;
+    if (type === "lead_score") {
+      const existing = new Set(requestedFields);
+      finalRequestedFields = [
+        ...requestedFields,
+        ...LEAD_SCORE_REQUIRED_FIELDS.filter((f) => !existing.has(f)),
+      ];
+    }
+
+    const job = createJob({
+      type,
+      identifierColumn,
+      requestedFields: finalRequestedFields,
+      customFieldDefs,
+      newsParams,
+      outreachContext,
+      scoreRubric,
+      rows,
+    });
 
     processJob(job.id).catch((err) => {
       console.error(`processJob failed for ${job.id}:`, err);

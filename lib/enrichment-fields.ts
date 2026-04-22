@@ -264,20 +264,112 @@ export const DECISION_MAKER_FIELD_GROUPS: FieldGroup[] = [
   },
 ];
 
+export const LEAD_SCORE_FIELD_GROUPS: FieldGroup[] = [
+  {
+    label: "Company Snapshot",
+    fields: [
+      { key: "industry",         label: "Industry",          description: "Primary industry or sector (e.g. SaaS, Fintech, Healthcare)" },
+      { key: "company_size",     label: "Company Size",      description: "Headcount range (e.g. 10–50, 50–200)" },
+      { key: "hq_location",      label: "HQ Location",       description: "City and country of headquarters" },
+      { key: "description",      label: "Description",       description: "One-sentence summary of what the company does" },
+      { key: "funding_stage",    label: "Funding Stage",     description: "Latest funding round (e.g. Seed, Series A, Public)" },
+      { key: "recent_funding_amount", label: "Recent Funding Amount", description: "Amount raised in the most recent funding round" },
+      { key: "key_technologies", label: "Key Technologies",  description: "Main tools or tech stack" },
+      { key: "linkedin_url",     label: "LinkedIn URL",      description: "Company LinkedIn page URL" },
+      { key: "website_url",      label: "Website URL",       description: "Official company website URL" },
+    ],
+  },
+  {
+    label: "Lead Score",
+    fields: [
+      {
+        key: "icp_fit_score",
+        label: "ICP Fit Score",
+        description: "Integer 0–100 scoring how well this company matches the ICP criteria you defined. Not a fact — a judgement grounded in the research.",
+      },
+      {
+        key: "icp_fit_reasoning",
+        label: "ICP Fit Reasoning",
+        description: "One sentence citing the specific evidence that drove the ICP Fit score (industry, size, geography, stage, segment).",
+      },
+      {
+        key: "pain_signal_score",
+        label: "Pain Signal Score",
+        description: "Integer 0–100 scoring how strongly the company exhibits pain signals from your rubric — hiring, funding, tech migrations, growth, public complaints, etc.",
+      },
+      {
+        key: "pain_signal_reasoning",
+        label: "Pain Signal Reasoning",
+        description: "One sentence citing the concrete signal(s) that drove the Pain Signal score, with dates/sources where possible.",
+      },
+      {
+        key: "reachability_score",
+        label: "Reachability Score",
+        description: "Integer 0–100 scoring how reachable the decision-making layer is — LinkedIn activity, named leaders, public email/phone, accessible social channels.",
+      },
+      {
+        key: "reachability_reasoning",
+        label: "Reachability Reasoning",
+        description: "One sentence citing the specific channels and signals (named person, active profile, published email, etc.) that drove the Reachability score.",
+      },
+      {
+        key: "total_score",
+        label: "Total Score",
+        description: "Weighted total 0–100 computed as (ICP × w_icp + Pain × w_pain + Reach × w_reach) / 100, using the weights from the rubric. This is the field you sort by to build the top-N list.",
+      },
+      {
+        key: "priority_tier",
+        label: "Priority Tier",
+        description: "A (80–100) / B (65–79) / C (45–64) / D (0–44) bucket derived from total_score.",
+      },
+      {
+        key: "score_explanation",
+        label: "Explanation",
+        description: "Two-sentence plain-English explanation a human SDR can read in five seconds: why this lead scored where it did, and what to do with it (prioritise / keep warm / skip).",
+      },
+    ],
+  },
+  {
+    label: "Outreach",
+    fields: [
+      {
+        key: "first_line",
+        label: "Personalized First Line",
+        description: "A one-sentence opener you can paste into an outreach email, DM, or LinkedIn message. References something concrete from the research (recent news, funding, hiring, tech stack, etc.) in a casual first-person tone.",
+      },
+    ],
+  },
+];
+
 export const COMPANY_FIELDS:         FieldDefinition[] = COMPANY_FIELD_GROUPS.flatMap((g)         => g.fields);
 export const PEOPLE_FIELDS:          FieldDefinition[] = PEOPLE_FIELD_GROUPS.flatMap((g)          => g.fields);
 export const DECISION_MAKER_FIELDS:  FieldDefinition[] = DECISION_MAKER_FIELD_GROUPS.flatMap((g)  => g.fields);
+export const LEAD_SCORE_FIELDS:      FieldDefinition[] = LEAD_SCORE_FIELD_GROUPS.flatMap((g)      => g.fields);
 
-export type EnrichmentType = "company" | "people" | "decision_maker";
+export const LEAD_SCORE_REQUIRED_FIELDS: string[] = [
+  "icp_fit_score",
+  "icp_fit_reasoning",
+  "pain_signal_score",
+  "pain_signal_reasoning",
+  "reachability_score",
+  "reachability_reasoning",
+  "total_score",
+  "priority_tier",
+  "score_explanation",
+];
+
+export type EnrichmentType = "company" | "people" | "decision_maker" | "lead_score";
 
 export function getFields(type: EnrichmentType): FieldDefinition[] {
   if (type === "company")        return COMPANY_FIELDS;
   if (type === "people")         return PEOPLE_FIELDS;
-  return DECISION_MAKER_FIELDS;
+  if (type === "decision_maker") return DECISION_MAKER_FIELDS;
+  return LEAD_SCORE_FIELDS;
 }
 
 export function getFieldGroups(type: EnrichmentType): FieldGroup[] {
   if (type === "company")        return COMPANY_FIELD_GROUPS;
   if (type === "people")         return PEOPLE_FIELD_GROUPS;
-  return DECISION_MAKER_FIELD_GROUPS;
+  if (type === "decision_maker") return DECISION_MAKER_FIELD_GROUPS;
+  return LEAD_SCORE_FIELD_GROUPS;
 }
