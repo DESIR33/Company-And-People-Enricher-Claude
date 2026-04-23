@@ -241,6 +241,9 @@ Open `.env.local` in any text editor and replace the placeholder values with you
 ```env
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
 PROSPEO_API_KEY=your_prospeo_api_key_here
+SUPABASE_URL=http://localhost:8000
+SUPABASE_PUBLISHABLE_KEY=your_supabase_publishable_key_here
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key_here
 ```
 
 > **Important:** Never commit `.env.local` to git. It is already listed in `.gitignore` to prevent accidental exposure of your API keys.
@@ -418,6 +421,23 @@ Only required if you want the **Work Email** field in people enrichment. All oth
 5. Paste it into `.env.local` as `PROSPEO_API_KEY=...`
 
 If this key is missing or left as the placeholder, the Work Email field will return empty values but the rest of enrichment works normally.
+
+---
+
+### `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` *(Supabase database)*
+
+Use these when running a local/self-hosted Supabase stack that should be available to the app.
+
+For your provided local setup:
+
+```env
+SUPABASE_URL=http://localhost:8000
+SUPABASE_PUBLISHABLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q
+```
+
+When these variables are present, the app boots with Supabase as the primary
+database backend and initializes the required tables in Postgres.
 
 ---
 

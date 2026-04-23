@@ -4,12 +4,162 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 
 const DB_PATH = process.env.DATABASE_PATH ?? path.join(process.cwd(), ".data", "jobs.db");
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_SQL_ENDPOINT =
+  process.env.SUPABASE_SQL_ENDPOINT ??
+  (SUPABASE_URL ? `${SUPABASE_URL.replace(/\/$/, "")}/pg/v1/query` : undefined);
 
-type DbWithInit = { db: Database.Database; initialized: boolean };
+type DbWithInit = { db: QueryDb; initialized: boolean };
 type Globals = typeof globalThis & { __enricherDb?: DbWithInit };
 const g = globalThis as Globals;
 
-function init(db: Database.Database): void {
+type QueryStatement = {
+  run: (...args: unknown[]) => unknown;
+  get: (...args: unknown[]) => unknown;
+  all: (...args: unknown[]) => unknown[];
+};
+
+type QueryDb = {
+  pragma: (statement: string) => void;
+  exec: (statement: string) => void;
+  prepare: (statement: string) => QueryStatement;
+  transaction: <T>(fn: () => T) => () => T;
+};
+
+function waitForPromise<T>(promise: Promise<T>): T {
+  const lock = new Int32Array(new SharedArrayBuffer(4));
+  let result: T | undefined;
+  let error: unknown;
+
+  promise
+    .then((value) => {
+      result = value;
+      Atomics.store(lock, 0, 1);
+      Atomics.notify(lock, 0, 1);
+    })
+    .catch((err: unknown) => {
+      error = err;
+      Atomics.store(lock, 0, 1);
+      Atomics.notify(lock, 0, 1);
+    });
+
+  while (Atomics.load(lock, 0) === 0) {
+    Atomics.wait(lock, 0, 0, 1_000);
+  }
+
+  if (error) throw error;
+  return result as T;
+}
+
+function normalizeRows(payload: unknown): Record<string, unknown>[] {
+  if (Array.isArray(payload)) return payload as Record<string, unknown>[];
+  if (!payload || typeof payload !== "object") return [];
+  const candidate = payload as Record<string, unknown>;
+  if (Array.isArray(candidate.result)) return candidate.result as Record<string, unknown>[];
+  if (Array.isArray(candidate.data)) return candidate.data as Record<string, unknown>[];
+  if (Array.isArray(candidate.rows)) return candidate.rows as Record<string, unknown>[];
+  return [];
+}
+
+class SupabaseSqlStatement implements QueryStatement {
+  constructor(
+    private readonly db: SupabaseSqlDb,
+    private readonly statement: string
+  ) {}
+
+  run(...args: unknown[]): unknown {
+    const { sql, values } = this.db.bind(this.statement, args);
+    return this.db.query(sql, values);
+  }
+
+  get(...args: unknown[]): unknown {
+    const { sql, values } = this.db.bind(this.statement, args);
+    const rows = this.db.query(sql, values);
+    return rows[0];
+  }
+
+  all(...args: unknown[]): unknown[] {
+    const { sql, values } = this.db.bind(this.statement, args);
+    return this.db.query(sql, values);
+  }
+}
+
+class SupabaseSqlDb implements QueryDb {
+  pragma(): void {
+    // SQLite-only pragma calls are no-ops on Postgres/Supabase.
+  }
+
+  exec(statement: string): void {
+    const sql = statement.trim();
+    if (!sql) return;
+    waitForPromise(this.queryAsync(sql, []));
+  }
+
+  prepare(statement: string): QueryStatement {
+    return new SupabaseSqlStatement(this, statement);
+  }
+
+  transaction<T>(fn: () => T): () => T {
+    // Supabase SQL-over-HTTP does not guarantee a sticky connection/session
+    // across independent requests, so treat this as a best-effort wrapper.
+    return () => fn();
+  }
+
+  bind(statement: string, args: unknown[]): { sql: string; values: unknown[] } {
+    if (args.length === 1 && args[0] && typeof args[0] === "object" && !Array.isArray(args[0])) {
+      const named = args[0] as Record<string, unknown>;
+      const keys: string[] = [];
+      const sql = statement.replace(/@([a-zA-Z0-9_]+)/g, (_, key: string) => {
+        let index = keys.indexOf(key);
+        if (index === -1) {
+          keys.push(key);
+          index = keys.length - 1;
+        }
+        return `$${index + 1}`;
+      });
+      const values = keys.map((key) => named[key] ?? null);
+      return { sql, values };
+    }
+
+    let idx = 0;
+    const sql = statement.replace(/\?/g, () => {
+      idx += 1;
+      return `$${idx}`;
+    });
+    return { sql, values: args as unknown[] };
+  }
+
+  query(statement: string, values: unknown[]): Record<string, unknown>[] {
+    return waitForPromise(this.queryAsync(statement, values));
+  }
+
+  private async queryAsync(statement: string, values: unknown[]): Promise<Record<string, unknown>[]> {
+    if (!SUPABASE_SQL_ENDPOINT || !SUPABASE_SERVICE_ROLE_KEY) {
+      throw new Error(
+        "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required when using Supabase as the database."
+      );
+    }
+    const response = await fetch(SUPABASE_SQL_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+      },
+      body: JSON.stringify({ query: statement, params: values }),
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      const details = await response.text().catch(() => "");
+      throw new Error(`Supabase query failed (${response.status}): ${details}`);
+    }
+    const payload = (await response.json().catch(() => null)) as unknown;
+    return normalizeRows(payload);
+  }
+}
+
+function initSqlite(db: Database.Database): void {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("synchronous = NORMAL");
@@ -331,11 +481,225 @@ function init(db: Database.Database): void {
   ).run(now);
 }
 
-export function getDb(): Database.Database {
+function initSupabase(db: QueryDb): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workspaces (
+      id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      brand_name TEXT,
+      logo_url TEXT,
+      primary_color TEXT,
+      accent_color TEXT,
+      support_email TEXT,
+      footer_text TEXT,
+      share_token TEXT NOT NULL UNIQUE,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS workspace_business_profiles (
+      workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+      business_name TEXT NOT NULL DEFAULT '',
+      offerings TEXT NOT NULL DEFAULT '[]',
+      service_geographies TEXT NOT NULL DEFAULT '[]',
+      target_industries TEXT NOT NULL DEFAULT '[]',
+      persona_titles TEXT NOT NULL DEFAULT '[]',
+      company_size_min INTEGER,
+      company_size_max INTEGER,
+      deal_size_min DOUBLE PRECISION,
+      deal_size_max DOUBLE PRECISION,
+      excluded_segments TEXT NOT NULL DEFAULT '[]',
+      messaging_tone TEXT,
+      compliance_boundaries TEXT NOT NULL DEFAULT '{}',
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS jobs (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      identifier_column TEXT NOT NULL,
+      city_column TEXT,
+      requested_fields TEXT NOT NULL,
+      custom_field_defs TEXT NOT NULL,
+      news_params TEXT,
+      outreach_context TEXT,
+      score_rubric TEXT,
+      channel_types TEXT,
+      include_owner_personal INTEGER,
+      suppression_list TEXT,
+      total_rows INTEGER NOT NULL,
+      processed_rows INTEGER NOT NULL DEFAULT 0,
+      error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS job_rows (
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      row_index INTEGER NOT NULL,
+      original_data TEXT NOT NULL,
+      enriched_data TEXT NOT NULL,
+      status TEXT NOT NULL,
+      error TEXT,
+      cost_usd DOUBLE PRECISION,
+      cache_read_tokens INTEGER,
+      cache_creation_tokens INTEGER,
+      PRIMARY KEY (job_id, row_index)
+    );
+    CREATE TABLE IF NOT EXISTS monitors (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT,
+      name TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      config TEXT NOT NULL,
+      schedule TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      webhook_url TEXT,
+      requested_fields TEXT NOT NULL,
+      custom_field_defs TEXT NOT NULL DEFAULT '[]',
+      outreach_context TEXT,
+      manual_engagers TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      last_run_at BIGINT,
+      next_run_at BIGINT,
+      lead_count_total INTEGER NOT NULL DEFAULT 0,
+      cost_usd_total DOUBLE PRECISION NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS monitor_runs (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+      status TEXT NOT NULL,
+      trigger TEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      started_at BIGINT,
+      completed_at BIGINT,
+      discovered_count INTEGER NOT NULL DEFAULT 0,
+      new_count INTEGER NOT NULL DEFAULT 0,
+      dedup_count INTEGER NOT NULL DEFAULT 0,
+      enriched_count INTEGER NOT NULL DEFAULT 0,
+      cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+      estimated_leads INTEGER,
+      discovery_log TEXT,
+      error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS monitor_leads (
+      id TEXT PRIMARY KEY,
+      monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+      run_id TEXT NOT NULL REFERENCES monitor_runs(id) ON DELETE CASCADE,
+      linkedin_url TEXT NOT NULL,
+      profile_name TEXT,
+      engagement_type TEXT,
+      engagement_text TEXT,
+      post_url TEXT,
+      enriched_data TEXT NOT NULL DEFAULT '{}',
+      enrichment_status TEXT NOT NULL DEFAULT 'pending',
+      enrichment_error TEXT,
+      cost_usd DOUBLE PRECISION,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      webhook_status TEXT,
+      UNIQUE(monitor_id, linkedin_url)
+    );
+    CREATE TABLE IF NOT EXISTS monthly_usage (
+      month TEXT PRIMARY KEY,
+      lead_count INTEGER NOT NULL DEFAULT 0,
+      cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+      updated_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS discovery_searches (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT,
+      mode TEXT NOT NULL,
+      name TEXT NOT NULL,
+      query_text TEXT NOT NULL,
+      seed_companies TEXT,
+      directory_config TEXT,
+      max_results INTEGER NOT NULL DEFAULT 25,
+      status TEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      started_at BIGINT,
+      completed_at BIGINT,
+      discovered_count INTEGER NOT NULL DEFAULT 0,
+      cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+      discovery_log TEXT,
+      agent_note TEXT,
+      error TEXT,
+      parent_monitor_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS discovered_leads (
+      id TEXT PRIMARY KEY,
+      search_id TEXT NOT NULL REFERENCES discovery_searches(id) ON DELETE CASCADE,
+      company_name TEXT NOT NULL,
+      website_url TEXT,
+      linkedin_url TEXT,
+      description TEXT,
+      location TEXT,
+      industry TEXT,
+      employee_range TEXT,
+      match_reason TEXT,
+      source_url TEXT,
+      score INTEGER,
+      created_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS signal_monitors (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT,
+      name TEXT NOT NULL,
+      signal_type TEXT NOT NULL,
+      config TEXT NOT NULL,
+      schedule TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      max_results INTEGER NOT NULL DEFAULT 25,
+      timeframe TEXT NOT NULL DEFAULT 'last 14 days',
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      last_run_at BIGINT,
+      next_run_at BIGINT,
+      run_count INTEGER NOT NULL DEFAULT 0,
+      lead_count_total INTEGER NOT NULL DEFAULT 0,
+      cost_usd_total DOUBLE PRECISION NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_monitor_runs_monitor ON monitor_runs(monitor_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_monitor_leads_monitor ON monitor_leads(monitor_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_monitor_leads_run ON monitor_leads(run_id);
+    CREATE INDEX IF NOT EXISTS idx_discovered_leads_search ON discovered_leads(search_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_discovery_searches_parent ON discovery_searches(parent_monitor_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_signal_monitors_due ON signal_monitors(active, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_jobs_workspace ON jobs(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_monitors_workspace ON monitors(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_signal_monitors_workspace ON signal_monitors(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_discovery_searches_workspace ON discovery_searches(workspace_id, created_at DESC);
+  `);
+
+  const defaultRow = db
+    .prepare(`SELECT id FROM workspaces WHERE slug = 'default'`)
+    .get() as { id: string } | undefined;
+  const now = Date.now();
+  const defaultId = defaultRow?.id ?? crypto.randomUUID();
+  if (!defaultRow) {
+    db.prepare(
+      `INSERT INTO workspaces (id, slug, name, brand_name, share_token, created_at, updated_at)
+       VALUES ($1, 'default', 'Default Workspace', 'Enricher', $2, $3, $4)`
+    ).run(defaultId, crypto.randomBytes(18).toString("base64url"), now, now);
+  }
+}
+
+export function getDb(): QueryDb {
   if (g.__enricherDb) return g.__enricherDb.db;
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  const db = new Database(DB_PATH);
-  init(db);
+  let db: QueryDb;
+  if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+    db = new SupabaseSqlDb();
+    initSupabase(db);
+  } else {
+    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+    const sqliteDb = new Database(DB_PATH);
+    initSqlite(sqliteDb);
+    db = sqliteDb;
+  }
   g.__enricherDb = { db, initialized: true };
   return db;
 }
