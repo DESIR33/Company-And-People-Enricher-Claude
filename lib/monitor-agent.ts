@@ -1,4 +1,6 @@
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
+import { resolveClaudeCodeExecutable } from "./claude-runtime";
+import { extractFirstJsonObject } from "./json-extract";
 import type { MonitorConfig, MonitorMode } from "./monitor-store";
 
 export type DiscoveredEngager = {
@@ -130,10 +132,10 @@ function parseDiscovery(raw: string): DiscoveryJSON {
   try {
     return JSON.parse(cleaned);
   } catch {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) return { engagers: [] };
+    const candidate = extractFirstJsonObject(raw);
+    if (!candidate) return { engagers: [] };
     try {
-      return JSON.parse(match[0]);
+      return JSON.parse(candidate);
     } catch {
       return { engagers: [] };
     }
@@ -188,6 +190,7 @@ export async function discoverEngagers(
         allowedTools: ["WebSearch", "WebFetch"],
         maxTurns: MAX_DISCOVERY_TURNS,
         permissionMode: "acceptEdits",
+        pathToClaudeCodeExecutable: resolveClaudeCodeExecutable(),
         abortController: (() => {
           const ctrl = new AbortController();
           if (params.signal) {
@@ -213,8 +216,15 @@ export async function discoverEngagers(
       }
     }
   } catch (err) {
-    push(`Discovery aborted: ${String(err)}`);
-    return { engagers: [], costUsd, log, note: "Discovery aborted" };
+    if (params.signal?.aborted) {
+      push("Discovery aborted by user");
+      return { engagers: [], costUsd, log, note: "Discovery aborted" };
+    }
+    // Surface real failures (missing native binary, network errors, SDK
+    // crashes) instead of returning an empty result that the runner would
+    // mark as a clean "completed" run with 0 engagers.
+    push(`Discovery failed: ${String(err)}`);
+    throw err;
   }
 
   if (!raw) {

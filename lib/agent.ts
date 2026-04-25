@@ -1,4 +1,5 @@
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
+import { resolveClaudeCodeExecutable } from "./claude-runtime";
 import { getFields, type EnrichmentType, type FieldDefinition } from "./enrichment-fields";
 import type { ScoreRubric } from "./job-store";
 import type { ChannelType } from "./channels/types";
@@ -28,6 +29,17 @@ const MAX_BACKOFF_MS = 8000;
 // budget / max-turns failures are terminal — retrying burns money to hit the
 // same wall.
 const RETRYABLE_RESULT_SUBTYPES = new Set(["error_during_execution"]);
+
+// Thrown errors we treat as terminal — programmer/config/environment problems
+// won't be fixed by retrying. Network blips and generic Errors are retried.
+function isRetryableThrownError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err instanceof TypeError) return false;
+  if (err instanceof ReferenceError) return false;
+  if (err instanceof SyntaxError) return false;
+  if (err instanceof RangeError) return false;
+  return true;
+}
 
 function backoffDelay(attemptIndex: number): number {
   const base = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** attemptIndex);
@@ -595,6 +607,7 @@ export async function enrichWithAgent(
             params.type === "buying_trigger" ? 18 :
             params.type === "people"         ? 15 : 10,
           permissionMode: "acceptEdits",
+          pathToClaudeCodeExecutable: resolveClaudeCodeExecutable(),
           abortController: attemptAbort,
         },
       })) {
@@ -625,6 +638,10 @@ export async function enrichWithAgent(
       if (params.signal?.aborted) throw err;
       lastError = err;
       lastErrorSubtype = undefined;
+      if (!isRetryableThrownError(err)) {
+        console.warn(`enrichWithAgent: terminal error, not retrying: ${err}`);
+        break;
+      }
       continue;
     }
 
