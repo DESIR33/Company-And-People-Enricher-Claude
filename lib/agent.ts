@@ -1,4 +1,5 @@
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
+import { resolveClaudeCodeExecutable } from "./claude-runtime";
 import { getFields, type EnrichmentType, type FieldDefinition } from "./enrichment-fields";
 import type { ScoreRubric } from "./job-store";
 import type { ChannelType } from "./channels/types";
@@ -595,6 +596,7 @@ export async function enrichWithAgent(
             params.type === "buying_trigger" ? 18 :
             params.type === "people"         ? 15 : 10,
           permissionMode: "acceptEdits",
+          pathToClaudeCodeExecutable: resolveClaudeCodeExecutable(),
           abortController: attemptAbort,
         },
       })) {

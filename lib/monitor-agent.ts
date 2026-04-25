@@ -1,4 +1,5 @@
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
+import { resolveClaudeCodeExecutable } from "./claude-runtime";
 import type { MonitorConfig, MonitorMode } from "./monitor-store";
 
 export type DiscoveredEngager = {
@@ -188,6 +189,7 @@ export async function discoverEngagers(
         allowedTools: ["WebSearch", "WebFetch"],
         maxTurns: MAX_DISCOVERY_TURNS,
         permissionMode: "acceptEdits",
+        pathToClaudeCodeExecutable: resolveClaudeCodeExecutable(),
         abortController: (() => {
           const ctrl = new AbortController();
           if (params.signal) {

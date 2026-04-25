@@ -1,4 +1,5 @@
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
+import { resolveClaudeCodeExecutable } from "./claude-runtime";
 import type { DirectoryConfig, DiscoveryMode } from "./discovery-store";
 
 export type SignalAgentConfig = {
@@ -591,6 +592,7 @@ export async function discoverCompanies(
         allowedTools: ["WebSearch", "WebFetch"],
         maxTurns: MAX_DISCOVERY_TURNS,
         permissionMode: "acceptEdits",
+        pathToClaudeCodeExecutable: resolveClaudeCodeExecutable(),
         abortController: (() => {
           const ctrl = new AbortController();
           if (params.signal) {
@@ -619,8 +621,15 @@ export async function discoverCompanies(
       }
     }
   } catch (err) {
-    push(`Discovery aborted: ${String(err)}`);
-    return { companies: [], costUsd, note: "Discovery aborted" };
+    if (params.signal?.aborted) {
+      push("Discovery aborted by user");
+      return { companies: [], costUsd, note: "Discovery aborted" };
+    }
+    // Surface real failures (missing native binary, network errors, SDK
+    // crashes) instead of returning an empty result that the runner would
+    // mark as a clean "completed" search with 0 leads.
+    push(`Discovery failed: ${String(err)}`);
+    throw err;
   }
 
   if (!raw) {
