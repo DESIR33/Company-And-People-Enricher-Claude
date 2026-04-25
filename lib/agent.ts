@@ -30,6 +30,17 @@ const MAX_BACKOFF_MS = 8000;
 // same wall.
 const RETRYABLE_RESULT_SUBTYPES = new Set(["error_during_execution"]);
 
+// Thrown errors we treat as terminal — programmer/config/environment problems
+// won't be fixed by retrying. Network blips and generic Errors are retried.
+function isRetryableThrownError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err instanceof TypeError) return false;
+  if (err instanceof ReferenceError) return false;
+  if (err instanceof SyntaxError) return false;
+  if (err instanceof RangeError) return false;
+  return true;
+}
+
 function backoffDelay(attemptIndex: number): number {
   const base = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** attemptIndex);
   const jitter = base * (0.5 + Math.random() * 0.5);
@@ -627,6 +638,10 @@ export async function enrichWithAgent(
       if (params.signal?.aborted) throw err;
       lastError = err;
       lastErrorSubtype = undefined;
+      if (!isRetryableThrownError(err)) {
+        console.warn(`enrichWithAgent: terminal error, not retrying: ${err}`);
+        break;
+      }
       continue;
     }
 

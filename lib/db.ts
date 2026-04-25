@@ -698,7 +698,12 @@ export function getDb(): QueryDb {
     fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
     const sqliteDb = new Database(DB_PATH);
     initSqlite(sqliteDb);
-    db = sqliteDb;
+    // better-sqlite3's Statement.run is typed `(params: {}) => RunResult`
+    // while QueryStatement uses `(...args: unknown[]) => unknown` so it can
+    // also describe the Supabase shim. The runtime contracts are compatible
+    // (we always call with positional args or a single named-params object);
+    // the structural type check fails on parameter variance only.
+    db = sqliteDb as unknown as QueryDb;
   }
   g.__enricherDb = { db, initialized: true };
   return db;

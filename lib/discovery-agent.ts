@@ -1,5 +1,6 @@
 import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agent-sdk";
 import { resolveClaudeCodeExecutable } from "./claude-runtime";
+import { extractFirstJsonObject } from "./json-extract";
 import type { DirectoryConfig, DiscoveryMode } from "./discovery-store";
 
 export type SignalAgentConfig = {
@@ -510,10 +511,10 @@ function parseDiscovery(raw: string): DiscoveryJSON {
   try {
     return JSON.parse(cleaned);
   } catch {
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) return { companies: [] };
+    const candidate = extractFirstJsonObject(raw);
+    if (!candidate) return { companies: [] };
     try {
-      return JSON.parse(match[0]);
+      return JSON.parse(candidate);
     } catch {
       return { companies: [] };
     }
