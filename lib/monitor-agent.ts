@@ -215,8 +215,15 @@ export async function discoverEngagers(
       }
     }
   } catch (err) {
-    push(`Discovery aborted: ${String(err)}`);
-    return { engagers: [], costUsd, log, note: "Discovery aborted" };
+    if (params.signal?.aborted) {
+      push("Discovery aborted by user");
+      return { engagers: [], costUsd, log, note: "Discovery aborted" };
+    }
+    // Surface real failures (missing native binary, network errors, SDK
+    // crashes) instead of returning an empty result that the runner would
+    // mark as a clean "completed" run with 0 engagers.
+    push(`Discovery failed: ${String(err)}`);
+    throw err;
   }
 
   if (!raw) {
