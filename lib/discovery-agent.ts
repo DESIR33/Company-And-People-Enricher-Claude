@@ -861,6 +861,27 @@ Workflow:
 Target: ${params.maxResults} HERE-listed businesses.`;
     }
 
+    case "yelp_direct": {
+      // Normally served by the runner via Playwright + the Yelp listing
+      // page parser. Agent fallback runs when Playwright isn't installed
+      // on the host (e.g. Vercel serverless deploys) or the scraper
+      // failed. Imitates the same query through web search.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on Yelp matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Use Yelp's site: search — site:yelp.com/biz <category> <geo>.
+2. For each result, capture name, websiteUrl (the external link from the Yelp profile, NOT the Yelp URL), phone, streetAddress, city, region, postalCode, rating, review count.
+3. matchReason MUST cite Yelp + rating + review count.
+4. Skip closed businesses ("Yelp users report this business is closed").
+
+Target: ${params.maxResults} Yelp-listed businesses.`;
+    }
+
     case "apify": {
       // Normally served by the runner via the Apify API. This agent
       // fallback only runs if APIFY_API_TOKEN is missing or the actor

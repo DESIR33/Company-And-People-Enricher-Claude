@@ -64,6 +64,7 @@ const DirectoryConfigSchema = z
       "tomtom",
       "here_places",
       "apify",
+      "yelp_direct",
     ]),
     category: z.string().trim().max(200).optional(),
     query: z.string().trim().max(500).optional(),
@@ -163,6 +164,10 @@ const DirectoryConfigSchema = z
         // optional because some actors (e.g. Crunchbase, Glassdoor) work
         // without a location filter.
         return !!v.actorId && !!(v.query || v.category);
+      }
+      if (v.source === "yelp_direct") {
+        // Yelp's search requires both a term and a location.
+        return !!(v.category || v.query) && !!v.geo;
       }
       if (v.source === "state_license_board" || v.source === "state_sos") {
         return !!v.state;

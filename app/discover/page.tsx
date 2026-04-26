@@ -81,7 +81,8 @@ type DirectorySource =
   | "bing_places"
   | "tomtom"
   | "here_places"
-  | "apify";
+  | "apify"
+  | "yelp_direct";
 
 type DirectoryConfig = {
   source: DirectorySource;
@@ -191,6 +192,7 @@ const LOCAL_DIRECTORY_SOURCES: DirectorySource[] = [
   "tomtom",
   "here_places",
   "apify",
+  "yelp_direct",
 ];
 
 function defaultEnrichFieldsForSearch(search: DiscoverySearch | null): string[] {
@@ -427,6 +429,12 @@ const DIRECTORY_META: Record<
     hint: "Run battle-tested Apify actors for sites that block direct fetches: LinkedIn, Glassdoor, Crunchbase, Yelp, Google Maps, Instagram. Apify handles proxies, browsers, and CAPTCHAs. Requires APIFY_API_TOKEN; pay per actor run.",
     smbFriendly: true,
   },
+  yelp_direct: {
+    label: "Yelp (self-hosted Playwright)",
+    icon: Star,
+    hint: "Self-hosted Yelp scraper. Lowest cost-per-lead at scale once the infra is up. Requires `npm install playwright && npx playwright install chromium` on the host (will not run on Vercel). Configure proxies via PLAYWRIGHT_PROXY_URL_POOL.",
+    smbFriendly: true,
+  },
   yelp: {
     label: "Yelp",
     icon: Star,
@@ -562,6 +570,7 @@ const DIRECTORY_SOURCE_ORDER: DirectorySource[] = [
   "here_places",
   "bing_places",
   "apify",
+  "yelp_direct",
   "google_maps",
   "osm_overpass",
   "yelp",
@@ -1103,7 +1112,8 @@ function CreateSearchForm({
               dirSource === "foursquare" ||
               dirSource === "bing_places" ||
               dirSource === "tomtom" ||
-              dirSource === "here_places") && (
+              dirSource === "here_places" ||
+              dirSource === "yelp_direct") && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -1315,7 +1325,8 @@ function CreateSearchForm({
               dirSource === "foursquare" ||
               dirSource === "bing_places" ||
               dirSource === "tomtom" ||
-              dirSource === "here_places") && (
+              dirSource === "here_places" ||
+              dirSource === "yelp_direct") && (
               <details className="rounded-lg border border-cloudy/30 bg-pampas/40">
                 <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-gray-700 flex items-center gap-1.5">
                   <Compass className="w-3.5 h-3.5 text-cloudy" strokeWidth={2} />

@@ -52,6 +52,10 @@ import {
   type ApifyLeadInput,
 } from "./directories/apify-actors";
 import { runActorAndGetItems } from "./scrapers/apify";
+import {
+  searchYelpDirect,
+  yelpDirectToLeadInput,
+} from "./directories/yelp-direct";
 import { getStateRegistry } from "./directories/state-registries";
 import { expandZipsForRadius, lookupZip, parseGeoString } from "./geo";
 import { dedupeById, suggestedTileMiles, tilesForRadius } from "./geo-fan";
@@ -145,6 +149,42 @@ export async function executeSearch(
       appendDiscoveryLog(
         searchId,
         `Search ${status}: ${count} Google Places businesses (Google quota only)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: Yelp via Playwright -------------------------
+    // Self-hosted scraper. Requires `npm install playwright` + a browser
+    // download on the host. Falls through to the agent-driven `yelp` source
+    // if the install isn't present (the runner reports it via log).
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "yelp_direct"
+    ) {
+      const count = await runYelpDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `Yelp (Playwright) returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} Yelp businesses (Playwright direct)`
       );
       await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
         appendDiscoveryLog(searchId, line)
@@ -982,6 +1022,62 @@ async function runApifyDirect(
   }
   log(`Apify: inserted ${inserted} new lead(s)`);
   return { count: inserted, costUsd };
+}
+
+// --- Yelp Playwright direct path -----------------------------------------
+// Self-hosted scraper: requires playwright installed on the host. Reports
+// the install error in the search log and returns 0 when unavailable so
+// the runner doesn't crash.
+async function runYelpDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const term = cfg.query ?? cfg.category;
+  const geo = cfg.geo;
+  if (!term || !geo) {
+    log(`Yelp (Playwright): need both a query/category and a geo to search`);
+    return 0;
+  }
+
+  let businesses;
+  try {
+    log(`Yelp (Playwright): searching "${term}" near "${geo}"`);
+    businesses = await searchYelpDirect({
+      category: cfg.category,
+      query: cfg.query,
+      geo,
+      maxResults,
+      signal,
+    });
+  } catch (err) {
+    log(`Yelp (Playwright) failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (businesses.length === 0) {
+    log(`Yelp (Playwright): 0 results — try a different category or geo`);
+    return 0;
+  }
+  log(
+    `Yelp (Playwright): ${businesses.length} candidate(s) before dedup, taking up to ${maxResults}`
+  );
+
+  let inserted = 0;
+  for (const b of businesses.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = yelpDirectToLeadInput(b, searchId, cfg.category, geo);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`Yelp (Playwright): inserted ${inserted} new lead(s)`);
+  return inserted;
 }
 
 // --- Bing Local Search direct path ---------------------------------------

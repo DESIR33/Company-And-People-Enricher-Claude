@@ -40,7 +40,8 @@ export type DirectorySource =
   | "bing_places"
   | "tomtom"
   | "here_places"
-  | "apify";
+  | "apify"
+  | "yelp_direct";
 
 export type DirectoryConfig = {
   source: DirectorySource;
