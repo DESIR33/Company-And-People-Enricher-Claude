@@ -2,6 +2,7 @@ import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agen
 import { resolveClaudeCodeExecutable } from "./claude-runtime";
 import { extractFirstJsonObject } from "./json-extract";
 import type { DirectoryConfig, DiscoveryMode } from "./discovery-store";
+import { findVerticalByQuery, getVertical } from "./taxonomy/lookup";
 
 export type SignalAgentConfig = {
   signalType: "funding" | "hiring" | "news" | "reviews" | "new_business" | "license";
@@ -315,6 +316,20 @@ Workflow:
 Target: ${params.maxResults} companies with a fresh news signal.`;
 }
 
+// Phase 5 — when the user types a free-text vertical like "plumber" or
+// "hvac contractor" for a NAICS-aware source (state SoS, license board,
+// Manta), resolve it to the canonical NAICS code(s) via the taxonomy
+// and append the hint to the prompt. Falls through to an empty string
+// when nothing matches, so existing behaviour is unchanged.
+function renderNaicsHint(rawCategory?: string): string {
+  if (!rawCategory) return "";
+  const v = getVertical(rawCategory) ?? findVerticalByQuery(rawCategory);
+  if (!v) return "";
+  const codes = v.naics.join(", ");
+  const sic = v.sic[0];
+  return `\nNAICS hint: ${codes} (${v.label}${sic ? `, SIC ${sic}` : ""})`;
+}
+
 function renderGeoBlock(cfg: DirectoryConfig): string {
   // Compose a one-line geo description that surfaces every input the user
   // provided — agents work much better when given lat/lng + radius + zip
@@ -615,9 +630,10 @@ Target: ${params.maxResults} YP-listed businesses.`;
     case "manta": {
       const category = cfg.category ?? cfg.query ?? "(none)";
       const geo = renderGeoBlock(cfg);
+      const naicsHint = renderNaicsHint(cfg.category ?? cfg.query);
       return `Find up to ${params.maxResults} businesses on Manta (manta.com), a US SMB directory with NAICS codes.
 
-Category: ${category}
+Category: ${category}${naicsHint}
 Geo: ${geo}${extra}
 
 Workflow:
@@ -724,10 +740,11 @@ Target: ${params.maxResults} marketplace-active SMBs (great for vendor/SaaS pitc
       const state = cfg.state ?? "(none)";
       const licenseType = cfg.category ?? cfg.query ?? "(any license type)";
       const geo = renderGeoBlock(cfg);
+      const naicsHint = renderNaicsHint(cfg.category ?? cfg.query);
       return `Find up to ${params.maxResults} licensed businesses from a state contractor-license board.
 
 State: ${state}
-License type: ${licenseType}
+License type: ${licenseType}${naicsHint}
 Geo: ${geo}${extra}
 
 Workflow:
@@ -743,18 +760,19 @@ Target: ${params.maxResults} actively-licensed businesses.`;
 
     case "state_sos": {
       const state = cfg.state ?? "(none)";
-      const naics = cfg.category ?? cfg.query ?? "(any industry)";
+      const industry = cfg.category ?? cfg.query ?? "(any industry)";
       const geo = renderGeoBlock(cfg);
+      const naicsHint = renderNaicsHint(cfg.category ?? cfg.query);
       return `Find up to ${params.maxResults} businesses recently registered with a state Secretary of State.
 
 State: ${state}
-NAICS / industry: ${naics}
+Industry: ${industry}${naicsHint}
 Geo: ${geo}${extra}
 
 Workflow:
 1. Use the state-specific filings search. Common ones: CA BizFile Online (https://bizfileonline.sos.ca.gov), TX Comptroller (https://mycpa.cpa.state.tx.us/coa/), FL Sunbiz (https://search.sunbiz.org), NY DOS Entity Search, GA eCorp (https://ecorp.sos.ga.gov/BusinessSearch).
 2. SoS filings include entity name, formation date, registered agent, principal address, entity type (LLC/Inc/PLLC), status.
-3. Filter to entities formed within the timeframe and matching the NAICS / industry where data is exposed.
+3. Filter to entities formed within the timeframe and matching the NAICS / industry where data is exposed. When a NAICS code is provided in the hint above, prefer searches that accept it directly.
 4. For each: companyName, streetAddress (principal address), city, region, postalCode, naicsCode (if listed), placeId (filing #), score 70+ (newly formed = high intent).
 5. matchReason MUST include formation date and entity type — e.g. "LLC formed 2026-04-02 in Travis County, TX".
 6. Skip dissolved or inactive filings.
