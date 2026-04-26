@@ -380,7 +380,12 @@ function initSqlite(db: Database.Database): void {
       first_seen_at INTEGER NOT NULL,
       last_seen_at INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      tech_stack TEXT,
+      domain_created_at INTEGER,
+      domain_registrar TEXT,
+      first_cert_at INTEGER,
+      signals_updated_at INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_canonical_companies_workspace
       ON canonical_companies(workspace_id, last_seen_at DESC);
@@ -487,6 +492,31 @@ function initSqlite(db: Database.Database): void {
   }
   if (!jobColumns.has("suppression_list")) {
     db.exec(`ALTER TABLE jobs ADD COLUMN suppression_list TEXT`);
+  }
+
+  // --- Phase 4 — signal-enrichment columns on canonical_companies ---
+  // Tech stack, domain freshness (RDAP), and CT-log first-cert date.
+  // These migrate cleanly on top of pre-Phase-4 canonical rows because
+  // they're all NULLable; new rows inserted by upsertCanonicalCompany
+  // leave them NULL until enrichSignals runs against the row.
+  const canonicalColumns = new Set(
+    (
+      db.prepare(`PRAGMA table_info(canonical_companies)`).all() as {
+        name: string;
+      }[]
+    ).map((c) => c.name)
+  );
+  const NEW_CANONICAL_COLUMNS: Array<[string, string]> = [
+    ["tech_stack", "TEXT"],
+    ["domain_created_at", "INTEGER"],
+    ["domain_registrar", "TEXT"],
+    ["first_cert_at", "INTEGER"],
+    ["signals_updated_at", "INTEGER"],
+  ];
+  for (const [name, type] of NEW_CANONICAL_COLUMNS) {
+    if (!canonicalColumns.has(name)) {
+      db.exec(`ALTER TABLE canonical_companies ADD COLUMN ${name} ${type}`);
+    }
   }
 
   // --- Client workspace scoping (white-label) ---
@@ -811,7 +841,12 @@ function initSupabase(db: QueryDb): void {
       first_seen_at BIGINT NOT NULL,
       last_seen_at BIGINT NOT NULL,
       created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL
+      updated_at BIGINT NOT NULL,
+      tech_stack TEXT,
+      domain_created_at BIGINT,
+      domain_registrar TEXT,
+      first_cert_at BIGINT,
+      signals_updated_at BIGINT
     );
     CREATE INDEX IF NOT EXISTS idx_canonical_companies_workspace
       ON canonical_companies(workspace_id, last_seen_at DESC);

@@ -189,6 +189,13 @@ export type CanonicalCompany = {
   lastSeenAt: number;
   createdAt: number;
   updatedAt: number;
+  // Phase 4 — signal enrichment fields. Populated by enrichCanonicalSignals;
+  // independent of source upserts so they don't clobber on every new source.
+  techStack?: string[];
+  domainCreatedAt?: number;
+  domainRegistrar?: string;
+  firstCertAt?: number;
+  signalsUpdatedAt?: number;
 };
 
 export type CanonicalUpsertInput = {
@@ -249,6 +256,11 @@ type CanonicalRow = {
   last_seen_at: number;
   created_at: number;
   updated_at: number;
+  tech_stack: string | null;
+  domain_created_at: number | null;
+  domain_registrar: string | null;
+  first_cert_at: number | null;
+  signals_updated_at: number | null;
 };
 
 function rowToCompany(r: CanonicalRow): CanonicalCompany {
@@ -287,6 +299,11 @@ function rowToCompany(r: CanonicalRow): CanonicalCompany {
     lastSeenAt: r.last_seen_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    techStack: r.tech_stack ? safeParseArray(r.tech_stack) : undefined,
+    domainCreatedAt: r.domain_created_at ?? undefined,
+    domainRegistrar: r.domain_registrar ?? undefined,
+    firstCertAt: r.first_cert_at ?? undefined,
+    signalsUpdatedAt: r.signals_updated_at ?? undefined,
   };
 }
 
