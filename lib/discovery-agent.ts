@@ -761,6 +761,46 @@ Workflow:
 
 Target: ${params.maxResults} newly registered businesses.`;
     }
+
+    case "google_places": {
+      // Normally served by the runner via the Google Places API (New).
+      // Agent fallback runs only if GOOGLE_PLACES_API_KEY is missing or the
+      // direct call failed.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on Google Maps matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Search Google Maps for the category in the geo. Extract business name, website, phone, full address, lat/lng, hours, rating, review count.
+2. For each: companyName, websiteUrl, phone, streetAddress, city, region, postalCode, lat, lng, hours.
+3. matchReason MUST cite Google Maps and rating (e.g. "Google Maps · 4.7★ (412 reviews)").
+4. Skip permanently closed listings.
+
+Target: ${params.maxResults} Google Maps-listed businesses.`;
+    }
+
+    case "foursquare": {
+      // Normally served by the runner via the Foursquare Places API. Agent
+      // fallback runs only if FOURSQUARE_API_KEY is missing or the direct
+      // call failed.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on Foursquare matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Search Foursquare (https://foursquare.com) or its city pages for the category in the geo.
+2. For each: companyName, websiteUrl, phone, streetAddress, city, region, postalCode, lat, lng.
+3. matchReason MUST cite Foursquare and the venue category.
+4. Skip closed venues.
+
+Target: ${params.maxResults} Foursquare-listed businesses.`;
+    }
   }
 }
 

@@ -19,8 +19,21 @@ import {
   queryOsmArea,
   queryOsmRadius,
 } from "./directories/osm-overpass";
+import {
+  googlePlaceToLeadInput,
+  searchPlacesByText,
+  searchPlacesNearby,
+  type GooglePlace,
+} from "./directories/google-places";
+import {
+  foursquarePlaceToLeadInput,
+  searchFoursquareNear,
+  searchFoursquareRadius,
+  type FoursquarePlace,
+} from "./directories/foursquare";
 import { getStateRegistry } from "./directories/state-registries";
 import { expandZipsForRadius, lookupZip, parseGeoString } from "./geo";
+import { dedupeById, suggestedTileMiles, tilesForRadius } from "./geo-fan";
 
 export type StartSearchResult =
   | { status: "started"; searchId: string }
@@ -75,6 +88,75 @@ export async function executeSearch(
       appendDiscoveryLog(
         searchId,
         `Search ${status}: ${osmCount} OSM businesses, $0.00 (free API)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: Google Places (New) -------------------------
+    // Same idea as OSM but uses Google's structured JSON. We fan a single
+    // radius query out into a tile grid because Nearby Search caps at 20
+    // results per call — without tiling, dense metros get truncated.
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "google_places"
+    ) {
+      const count = await runGooglePlacesDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `Google Places returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} Google Places businesses (Google quota only)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: Foursquare Places ---------------------------
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "foursquare"
+    ) {
+      const count = await runFoursquareDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `Foursquare returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} Foursquare businesses (Foursquare quota only)`
       );
       await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
         appendDiscoveryLog(searchId, line)
@@ -263,6 +345,240 @@ async function runOsmOverpassDirect(
     }
   }
   log(`OSM Overpass: inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- Google Places direct path --------------------------------------------
+// Uses the new Places API. Two modes:
+//   - Nearby: lat/lng + radius + category preset → fans out across a tile
+//     grid because Nearby Search hard-caps at 20 results per call.
+//   - Text:   free-text query, optionally biased to a circle. Returns up
+//     to 60 results across paginated pages.
+//
+// Picks Nearby when both a category preset and a center point are present;
+// otherwise falls back to Text Search. Tile fan-out caps at 25 tiles to
+// keep quota use predictable.
+async function runGooglePlacesDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const category = cfg.category ?? cfg.query;
+  const queryText = cfg.query ?? cfg.category;
+
+  let lat = cfg.lat;
+  let lng = cfg.lng;
+  let geoLabel = cfg.geo;
+  if ((lat === undefined || lng === undefined) && cfg.geo) {
+    const parsed = parseGeoString(cfg.geo);
+    if (parsed.kind === "zip" || parsed.kind === "latlng") {
+      lat = parsed.lat;
+      lng = parsed.lng;
+      if (parsed.kind === "zip") geoLabel = `${parsed.city}, ${parsed.state} ${parsed.zip}`;
+    }
+  }
+  if ((lat === undefined || lng === undefined) && cfg.zips?.length) {
+    const rec = lookupZip(cfg.zips[0]);
+    if (rec) {
+      lat = rec.lat;
+      lng = rec.lng;
+      geoLabel = `${rec.city}, ${rec.state} ${rec.zip}`;
+    }
+  }
+
+  const radiusMiles = cfg.radiusMiles ?? 10;
+  let results: GooglePlace[] = [];
+
+  try {
+    if (lat !== undefined && lng !== undefined && category) {
+      const tileMiles = suggestedTileMiles("google_places", "med");
+      const tiles = tilesForRadius(lat, lng, radiusMiles, tileMiles, { maxTiles: 25 });
+      log(
+        `Google Places: ${tiles.length} tile(s) of ~${tileMiles}mi covering ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+      );
+      const collected: GooglePlace[] = [];
+      for (const tile of tiles) {
+        if (signal.aborted) break;
+        if (collected.length >= maxResults) break;
+        try {
+          const batch = await searchPlacesNearby({
+            lat: tile.lat,
+            lng: tile.lng,
+            radiusMiles: tile.radiusMiles,
+            category,
+            maxResults: 20,
+            signal,
+          });
+          collected.push(...batch);
+        } catch (err) {
+          log(`Google Places tile failed: ${String(err)}`);
+        }
+      }
+      results = dedupeById(collected, (p) => p.placeId);
+    } else if (queryText) {
+      log(
+        `Google Places: text search "${queryText}"${
+          lat !== undefined && lng !== undefined ? ` biased near ${lat},${lng}` : ""
+        }`
+      );
+      results = await searchPlacesByText({
+        query: queryText,
+        lat,
+        lng,
+        radiusMiles: lat !== undefined && lng !== undefined ? radiusMiles : undefined,
+        category,
+        maxResults: Math.min(maxResults, 60),
+        signal,
+      });
+    } else {
+      log(`Google Places: missing query and category — nothing to search`);
+      return 0;
+    }
+  } catch (err) {
+    log(`Google Places query failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (results.length === 0) {
+    log(`Google Places: 0 results — try widening the radius or using free-text query`);
+    return 0;
+  }
+  log(`Google Places: ${results.length} candidate(s) before dedup, taking up to ${maxResults}`);
+
+  let inserted = 0;
+  for (const p of results.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = googlePlaceToLeadInput(p, searchId, category, geoLabel);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`Google Places: inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- Foursquare direct path -----------------------------------------------
+// Foursquare's circle search caps at 100km radius and 50 results per page,
+// but supports cursor pagination so a single radius call can sweep deeper
+// than Google's Nearby. We still fan a wide radius into tiles when the
+// caller asks for >25 mi to keep dense-metro coverage usable.
+async function runFoursquareDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const category = cfg.category;
+  const query = cfg.query;
+
+  let lat = cfg.lat;
+  let lng = cfg.lng;
+  let geoLabel = cfg.geo;
+  if ((lat === undefined || lng === undefined) && cfg.geo) {
+    const parsed = parseGeoString(cfg.geo);
+    if (parsed.kind === "zip" || parsed.kind === "latlng") {
+      lat = parsed.lat;
+      lng = parsed.lng;
+      if (parsed.kind === "zip") geoLabel = `${parsed.city}, ${parsed.state} ${parsed.zip}`;
+    }
+  }
+  if ((lat === undefined || lng === undefined) && cfg.zips?.length) {
+    const rec = lookupZip(cfg.zips[0]);
+    if (rec) {
+      lat = rec.lat;
+      lng = rec.lng;
+      geoLabel = `${rec.city}, ${rec.state} ${rec.zip}`;
+    }
+  }
+
+  const radiusMiles = cfg.radiusMiles ?? 10;
+  let results: FoursquarePlace[] = [];
+
+  try {
+    if (lat !== undefined && lng !== undefined) {
+      // Single call when the radius is small enough; tile when it's large.
+      if (radiusMiles <= 25) {
+        log(
+          `Foursquare: radius search ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+        );
+        results = await searchFoursquareRadius({
+          lat,
+          lng,
+          radiusMiles,
+          category,
+          query,
+          maxResults,
+          signal,
+        });
+      } else {
+        const tileMiles = suggestedTileMiles("foursquare", "med");
+        const tiles = tilesForRadius(lat, lng, radiusMiles, tileMiles, { maxTiles: 25 });
+        log(
+          `Foursquare: ${tiles.length} tile(s) of ~${tileMiles}mi covering ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+        );
+        const collected: FoursquarePlace[] = [];
+        for (const tile of tiles) {
+          if (signal.aborted) break;
+          if (collected.length >= maxResults) break;
+          try {
+            const batch = await searchFoursquareRadius({
+              lat: tile.lat,
+              lng: tile.lng,
+              radiusMiles: tile.radiusMiles,
+              category,
+              query,
+              maxResults: 50,
+              signal,
+            });
+            collected.push(...batch);
+          } catch (err) {
+            log(`Foursquare tile failed: ${String(err)}`);
+          }
+        }
+        results = dedupeById(collected, (p) => p.fsqId);
+      }
+    } else if (cfg.geo) {
+      log(`Foursquare: near "${cfg.geo}"`);
+      results = await searchFoursquareNear({
+        near: cfg.geo,
+        category,
+        query,
+        maxResults,
+        signal,
+      });
+    } else {
+      log(`Foursquare: missing geo — supply lat/lng, zip, or a "near" string`);
+      return 0;
+    }
+  } catch (err) {
+    log(`Foursquare query failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (results.length === 0) {
+    log(`Foursquare: 0 results — try a different category or widen the radius`);
+    return 0;
+  }
+  log(`Foursquare: ${results.length} candidate(s) before dedup, taking up to ${maxResults}`);
+
+  let inserted = 0;
+  for (const p of results.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = foursquarePlaceToLeadInput(p, searchId, category, geoLabel);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`Foursquare: inserted ${inserted} new lead(s)`);
   return inserted;
 }
 

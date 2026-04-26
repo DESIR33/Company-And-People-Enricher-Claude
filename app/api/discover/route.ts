@@ -58,6 +58,8 @@ const DirectoryConfigSchema = z
       "delivery_marketplace",
       "state_license_board",
       "state_sos",
+      "google_places",
+      "foursquare",
     ]),
     category: z.string().trim().max(200).optional(),
     query: z.string().trim().max(500).optional(),
@@ -104,6 +106,25 @@ const DirectoryConfigSchema = z
         const hasCat = !!(v.category || v.query);
         const hasGeo = !!(v.geo || v.lat !== undefined || v.zips?.length);
         return hasCat && hasGeo;
+      }
+      if (v.source === "google_places") {
+        // Text query alone is enough (Google Places Text Search). Nearby
+        // mode needs lat/lng + a category preset.
+        const hasQuery = !!(v.query || v.category);
+        const hasNearby =
+          v.lat !== undefined && v.lng !== undefined && !!v.category;
+        return hasQuery || hasNearby;
+      }
+      if (v.source === "foursquare") {
+        // Either a circle (lat/lng), a "near" string in `geo`, or a zip we
+        // can resolve. Plus a category or free-text query so we don't pull
+        // every place in the metro.
+        const hasGeo =
+          (v.lat !== undefined && v.lng !== undefined) ||
+          !!v.geo ||
+          !!v.zips?.length;
+        const hasFilter = !!(v.category || v.query);
+        return hasGeo && hasFilter;
       }
       if (v.source === "state_license_board" || v.source === "state_sos") {
         return !!v.state;

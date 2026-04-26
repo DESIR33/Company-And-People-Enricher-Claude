@@ -34,7 +34,9 @@ export type DirectorySource =
   | "tripadvisor"
   | "delivery_marketplace"
   | "state_license_board"
-  | "state_sos";
+  | "state_sos"
+  | "google_places"
+  | "foursquare";
 
 export type DirectoryConfig = {
   source: DirectorySource;
