@@ -12,6 +12,8 @@ import {
   ShieldCheck,
   Sparkles,
   RefreshCw,
+  Zap,
+  Calendar,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -47,6 +49,14 @@ type CanonicalCompany = {
   sourceCount: number;
   firstSeenAt: number;
   lastSeenAt: number;
+  // Phase 4 — signal-enrichment fields populated by /api/canonical-
+  // companies/[id]/enrich. All optional; rows that haven't been
+  // enriched simply omit them.
+  techStack?: string[];
+  domainCreatedAt?: number;
+  domainRegistrar?: string;
+  firstCertAt?: number;
+  signalsUpdatedAt?: number;
 };
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -101,6 +111,45 @@ export default function CanonicalCompaniesPage() {
   const [search, setSearch] = useState("");
   const [backfilling, setBackfilling] = useState(false);
   const [backfillResult, setBackfillResult] = useState<string>("");
+  // Phase 4 — track per-row enrichment state so the spinner shows on the
+  // right row and other rows stay interactive.
+  const [enrichingIds, setEnrichingIds] = useState<Set<string>>(new Set());
+
+  const runEnrich = useCallback(async (id: string) => {
+    setEnrichingIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+    try {
+      const res = await fetch(
+        `/api/canonical-companies/${encodeURIComponent(id)}/enrich`,
+        { method: "POST" }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setError(`Enrich failed: ${data.error ?? res.statusText}`);
+        return;
+      }
+      // Splice the freshly-enriched row in place — avoids the table
+      // rerender flicker a full reload would cause.
+      if (data.company) {
+        setCompanies((prev) =>
+          prev
+            ? prev.map((c) => (c.id === id ? (data.company as CanonicalCompany) : c))
+            : prev
+        );
+      }
+    } catch (err) {
+      setError(`Enrich failed: ${String(err)}`);
+    } finally {
+      setEnrichingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -272,11 +321,17 @@ export default function CanonicalCompaniesPage() {
                     <th className="px-3 py-2 font-semibold">Contact</th>
                     <th className="px-3 py-2 font-semibold">Location</th>
                     <th className="px-3 py-2 font-semibold">Signals</th>
+                    <th className="px-3 py-2 font-semibold w-1"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((c) => (
-                    <CompanyRow key={c.id} company={c} />
+                    <CompanyRow
+                      key={c.id}
+                      company={c}
+                      onEnrich={runEnrich}
+                      enriching={enrichingIds.has(c.id)}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -288,7 +343,17 @@ export default function CanonicalCompaniesPage() {
   );
 }
 
-function CompanyRow({ company }: { company: CanonicalCompany }) {
+function CompanyRow({
+  company,
+  onEnrich,
+  enriching,
+}: {
+  company: CanonicalCompany;
+  onEnrich: (id: string) => void;
+  enriching: boolean;
+}) {
+  // Enrichment is only useful when there's a domain to introspect.
+  const canEnrich = !!company.domain || !!company.websiteUrl;
   return (
     <tr className="border-t border-cloudy/10 align-top hover:bg-pampas/40">
       <td className="px-3 py-3">
@@ -378,10 +443,83 @@ function CompanyRow({ company }: { company: CanonicalCompany }) {
               {company.yearsInBusiness}y in business
             </span>
           )}
+          {company.domainCreatedAt !== undefined && (
+            <SignalBadge
+              icon={<Calendar className="w-3 h-3" />}
+              label="Domain"
+              value={`${ageInYears(company.domainCreatedAt)}y${
+                company.domainRegistrar ? ` · ${company.domainRegistrar}` : ""
+              }`}
+            />
+          )}
+          {company.firstCertAt !== undefined && (
+            <SignalBadge
+              icon={<Globe className="w-3 h-3" />}
+              label="Live since"
+              value={ageLabel(company.firstCertAt)}
+            />
+          )}
+          {company.techStack && company.techStack.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1 max-w-[260px]">
+              {company.techStack.map((t) => (
+                <span
+                  key={t}
+                  className="inline-flex items-center px-1.5 py-0.5 rounded bg-brand-50 border border-brand-200 text-[10px] text-brand-700"
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+          {company.signalsUpdatedAt && (
+            <span className="text-[10px] text-cloudy mt-0.5">
+              Enriched {ageLabel(company.signalsUpdatedAt)} ago
+            </span>
+          )}
         </div>
+      </td>
+      <td className="px-3 py-3">
+        <button
+          onClick={() => onEnrich(company.id)}
+          disabled={enriching || !canEnrich}
+          title={
+            canEnrich
+              ? "Fetch tech stack, domain age, and first-cert date for this company"
+              : "Enrichment needs a domain — run discovery to populate one first"
+          }
+          className={clsx(
+            "inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] font-medium transition-colors",
+            canEnrich
+              ? "border-cloudy/40 text-gray-700 hover:bg-pampas/60 disabled:opacity-60"
+              : "border-cloudy/20 text-cloudy cursor-not-allowed"
+          )}
+        >
+          {enriching ? (
+            <Loader2 className="w-3 h-3 animate-spin" />
+          ) : (
+            <Zap className="w-3 h-3" />
+          )}
+          Enrich
+        </button>
       </td>
     </tr>
   );
+}
+
+function ageInYears(epochMs: number): number {
+  return Math.max(0, Math.floor((Date.now() - epochMs) / (365.25 * 24 * 3600 * 1000)));
+}
+
+function ageLabel(epochMs: number): string {
+  const diffMs = Math.max(0, Date.now() - epochMs);
+  const days = Math.floor(diffMs / (24 * 3600 * 1000));
+  if (days >= 365) return `${Math.floor(days / 365)}y`;
+  if (days >= 30) return `${Math.floor(days / 30)}mo`;
+  if (days >= 1) return `${days}d`;
+  const hours = Math.floor(diffMs / (3600 * 1000));
+  if (hours >= 1) return `${hours}h`;
+  const mins = Math.max(1, Math.floor(diffMs / (60 * 1000)));
+  return `${mins}m`;
 }
 
 function SignalBadge({
