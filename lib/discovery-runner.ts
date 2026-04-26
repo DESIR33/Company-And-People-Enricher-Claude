@@ -36,6 +36,16 @@ import {
   searchBingLocal,
   type BingPlace,
 } from "./directories/bing-places";
+import {
+  searchTomTomRadius,
+  tomtomPlaceToLeadInput,
+  type TomTomPlace,
+} from "./directories/tomtom";
+import {
+  herePlaceToLeadInput,
+  searchHerePlaces,
+  type HerePlace,
+} from "./directories/here-places";
 import { getStateRegistry } from "./directories/state-registries";
 import { expandZipsForRadius, lookupZip, parseGeoString } from "./geo";
 import { dedupeById, suggestedTileMiles, tilesForRadius } from "./geo-fan";
@@ -129,6 +139,72 @@ export async function executeSearch(
       appendDiscoveryLog(
         searchId,
         `Search ${status}: ${count} Google Places businesses (Google quota only)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: TomTom Search -------------------------------
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "tomtom"
+    ) {
+      const count = await runTomTomDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `TomTom Search returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} TomTom businesses (TomTom quota only)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: HERE Discover -------------------------------
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "here_places"
+    ) {
+      const count = await runHereDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `HERE returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} HERE businesses (HERE quota only)`
       );
       await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
         appendDiscoveryLog(searchId, line)
@@ -407,25 +483,7 @@ async function runGooglePlacesDirect(
   const category = cfg.category ?? cfg.query;
   const queryText = cfg.query ?? cfg.category;
 
-  let lat = cfg.lat;
-  let lng = cfg.lng;
-  let geoLabel = cfg.geo;
-  if ((lat === undefined || lng === undefined) && cfg.geo) {
-    const parsed = parseGeoString(cfg.geo);
-    if (parsed.kind === "zip" || parsed.kind === "latlng") {
-      lat = parsed.lat;
-      lng = parsed.lng;
-      if (parsed.kind === "zip") geoLabel = `${parsed.city}, ${parsed.state} ${parsed.zip}`;
-    }
-  }
-  if ((lat === undefined || lng === undefined) && cfg.zips?.length) {
-    const rec = lookupZip(cfg.zips[0]);
-    if (rec) {
-      lat = rec.lat;
-      lng = rec.lng;
-      geoLabel = `${rec.city}, ${rec.state} ${rec.zip}`;
-    }
-  }
+  const { lat, lng, geoLabel } = resolveLatLng(cfg);
 
   const radiusMiles = cfg.radiusMiles ?? 10;
   let results: GooglePlace[] = [];
@@ -516,25 +574,7 @@ async function runFoursquareDirect(
   const category = cfg.category;
   const query = cfg.query;
 
-  let lat = cfg.lat;
-  let lng = cfg.lng;
-  let geoLabel = cfg.geo;
-  if ((lat === undefined || lng === undefined) && cfg.geo) {
-    const parsed = parseGeoString(cfg.geo);
-    if (parsed.kind === "zip" || parsed.kind === "latlng") {
-      lat = parsed.lat;
-      lng = parsed.lng;
-      if (parsed.kind === "zip") geoLabel = `${parsed.city}, ${parsed.state} ${parsed.zip}`;
-    }
-  }
-  if ((lat === undefined || lng === undefined) && cfg.zips?.length) {
-    const rec = lookupZip(cfg.zips[0]);
-    if (rec) {
-      lat = rec.lat;
-      lng = rec.lng;
-      geoLabel = `${rec.city}, ${rec.state} ${rec.zip}`;
-    }
-  }
+  const { lat, lng, geoLabel } = resolveLatLng(cfg);
 
   const radiusMiles = cfg.radiusMiles ?? 10;
   let results: FoursquarePlace[] = [];
@@ -620,11 +660,11 @@ async function runFoursquareDirect(
   return inserted;
 }
 
-// --- Bing Local Search direct path ---------------------------------------
-// Bing's Local Search caps at 25 results per call with no pagination, so
-// dense metros must be tile-fanned. We always tile when the requested
-// radius exceeds the per-call tile size to keep coverage uniform.
-async function runBingPlacesDirect(
+// --- TomTom Search direct path -------------------------------------------
+// TomTom returns up to 100 results per call with a 50km radius cap. We
+// tile-fan when the requested radius is larger than ~30 mi, single-call
+// otherwise.
+async function runTomTomDirect(
   cfg: DirectoryConfig,
   maxResults: number,
   searchId: string,
@@ -635,6 +675,176 @@ async function runBingPlacesDirect(
   const category = cfg.category;
   const query = cfg.query ?? cfg.category;
 
+  const { lat, lng, geoLabel } = resolveLatLng(cfg);
+  if (lat === undefined || lng === undefined) {
+    log(`TomTom: missing geo — supply lat/lng, zip, or a parseable city/zip in geo`);
+    return 0;
+  }
+
+  const radiusMiles = cfg.radiusMiles ?? 10;
+  let results: TomTomPlace[];
+  try {
+    if (radiusMiles <= 30) {
+      log(`TomTom: radius search ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`);
+      results = await searchTomTomRadius({
+        lat,
+        lng,
+        radiusMiles,
+        category,
+        query,
+        maxResults,
+        signal,
+      });
+    } else {
+      const tileMiles = suggestedTileMiles("tomtom", "med");
+      const tiles = tilesForRadius(lat, lng, radiusMiles, tileMiles, { maxTiles: 25 });
+      log(
+        `TomTom: ${tiles.length} tile(s) of ~${tileMiles}mi covering ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+      );
+      const collected: TomTomPlace[] = [];
+      for (const tile of tiles) {
+        if (signal.aborted) break;
+        if (collected.length >= maxResults) break;
+        try {
+          const batch = await searchTomTomRadius({
+            lat: tile.lat,
+            lng: tile.lng,
+            radiusMiles: tile.radiusMiles,
+            category,
+            query,
+            maxResults: 100,
+            signal,
+          });
+          collected.push(...batch);
+        } catch (err) {
+          log(`TomTom tile failed: ${String(err)}`);
+        }
+      }
+      results = dedupeById(collected, (p) => p.ttId);
+    }
+  } catch (err) {
+    log(`TomTom query failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (results.length === 0) {
+    log(`TomTom: 0 results — try a different category or widen the radius`);
+    return 0;
+  }
+  log(`TomTom: ${results.length} candidate(s) before dedup, taking up to ${maxResults}`);
+
+  let inserted = 0;
+  for (const p of results.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = tomtomPlaceToLeadInput(p, searchId, category, geoLabel);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`TomTom: inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- HERE Discover direct path -------------------------------------------
+// HERE caps at 100 results per call. /browse takes structured category
+// IDs (preferred when we have a preset); /discover takes free text. The
+// connector picks per-call automatically; the runner just decides
+// single-call vs. tile-fan based on requested radius.
+async function runHereDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const category = cfg.category;
+  const query = cfg.query ?? cfg.category;
+
+  const { lat, lng, geoLabel } = resolveLatLng(cfg);
+  if (lat === undefined || lng === undefined) {
+    log(`HERE: missing geo — supply lat/lng, zip, or a parseable city/zip in geo`);
+    return 0;
+  }
+
+  const radiusMiles = cfg.radiusMiles ?? 10;
+  let results: HerePlace[];
+  try {
+    if (radiusMiles <= 30) {
+      log(`HERE: radius search ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`);
+      results = await searchHerePlaces({
+        lat,
+        lng,
+        radiusMiles,
+        category,
+        query,
+        maxResults,
+        signal,
+      });
+    } else {
+      const tileMiles = suggestedTileMiles("here_places", "med");
+      const tiles = tilesForRadius(lat, lng, radiusMiles, tileMiles, { maxTiles: 25 });
+      log(
+        `HERE: ${tiles.length} tile(s) of ~${tileMiles}mi covering ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+      );
+      const collected: HerePlace[] = [];
+      for (const tile of tiles) {
+        if (signal.aborted) break;
+        if (collected.length >= maxResults) break;
+        try {
+          const batch = await searchHerePlaces({
+            lat: tile.lat,
+            lng: tile.lng,
+            radiusMiles: tile.radiusMiles,
+            category,
+            query,
+            maxResults: 100,
+            signal,
+          });
+          collected.push(...batch);
+        } catch (err) {
+          log(`HERE tile failed: ${String(err)}`);
+        }
+      }
+      results = dedupeById(collected, (p) => p.hereId);
+    }
+  } catch (err) {
+    log(`HERE query failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (results.length === 0) {
+    log(`HERE: 0 results — try a different category or widen the radius`);
+    return 0;
+  }
+  log(`HERE: ${results.length} candidate(s) before dedup, taking up to ${maxResults}`);
+
+  let inserted = 0;
+  for (const p of results.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = herePlaceToLeadInput(p, searchId, category, geoLabel);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`HERE: inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// Lat/lng resolver shared by all native point-anchored sources. Priority:
+// explicit cfg.lat/lng, then parsed geo string (zip / "lat,lng" forms),
+// then the first zip from cfg.zips. Returns undefined coords when the
+// caller didn't supply enough info — the per-source runner logs and
+// short-circuits.
+function resolveLatLng(cfg: DirectoryConfig): {
+  lat?: number;
+  lng?: number;
+  geoLabel?: string;
+} {
   let lat = cfg.lat;
   let lng = cfg.lng;
   let geoLabel = cfg.geo;
@@ -654,6 +864,25 @@ async function runBingPlacesDirect(
       geoLabel = `${rec.city}, ${rec.state} ${rec.zip}`;
     }
   }
+  return { lat, lng, geoLabel };
+}
+
+// --- Bing Local Search direct path ---------------------------------------
+// Bing's Local Search caps at 25 results per call with no pagination, so
+// dense metros must be tile-fanned. We always tile when the requested
+// radius exceeds the per-call tile size to keep coverage uniform.
+async function runBingPlacesDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const category = cfg.category;
+  const query = cfg.query ?? cfg.category;
+
+  const { lat, lng, geoLabel } = resolveLatLng(cfg);
 
   if (lat === undefined || lng === undefined) {
     log(`Bing Local Search: missing geo — supply lat/lng, zip, or a parseable city/zip in geo`);

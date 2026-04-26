@@ -78,7 +78,9 @@ type DirectorySource =
   | "state_sos"
   | "google_places"
   | "foursquare"
-  | "bing_places";
+  | "bing_places"
+  | "tomtom"
+  | "here_places";
 
 type DirectoryConfig = {
   source: DirectorySource;
@@ -184,6 +186,8 @@ const LOCAL_DIRECTORY_SOURCES: DirectorySource[] = [
   "google_places",
   "foursquare",
   "bing_places",
+  "tomtom",
+  "here_places",
 ];
 
 function defaultEnrichFieldsForSearch(search: DiscoverySearch | null): string[] {
@@ -402,6 +406,18 @@ const DIRECTORY_META: Record<
     hint: "Native Bing Maps Local Search API. Useful as a Google fallback in regions where Google quotas/coverage thin out. Requires BING_MAPS_API_KEY.",
     smbFriendly: true,
   },
+  tomtom: {
+    label: "TomTom (API)",
+    icon: Map,
+    hint: "Native TomTom Search API. Strongest international POI dataset of the major commercial mappers, generous free tier. Best for ex-US sweeps. Requires TOMTOM_API_KEY.",
+    smbFriendly: true,
+  },
+  here_places: {
+    label: "HERE (API)",
+    icon: Map,
+    hint: "Native HERE Discover/Browse API. Best-in-class European POI coverage and vehicle-routing-grade addresses. Requires HERE_API_KEY.",
+    smbFriendly: true,
+  },
   yelp: {
     label: "Yelp",
     icon: Star,
@@ -533,6 +549,8 @@ const DIRECTORY_META: Record<
 const DIRECTORY_SOURCE_ORDER: DirectorySource[] = [
   "google_places",
   "foursquare",
+  "tomtom",
+  "here_places",
   "bing_places",
   "google_maps",
   "osm_overpass",
@@ -737,7 +755,12 @@ function CreateSearchForm({
           );
         }
       }
-      if (dirSource === "foursquare" || dirSource === "bing_places") {
+      if (
+        dirSource === "foursquare" ||
+        dirSource === "bing_places" ||
+        dirSource === "tomtom" ||
+        dirSource === "here_places"
+      ) {
         const hasFilter = !!(directoryConfig.category || directoryConfig.query);
         const hasGeo =
           (directoryConfig.lat !== undefined && directoryConfig.lng !== undefined) ||
@@ -1053,13 +1076,17 @@ function CreateSearchForm({
               dirSource === "delivery_marketplace" ||
               dirSource === "google_places" ||
               dirSource === "foursquare" ||
-              dirSource === "bing_places") && (
+              dirSource === "bing_places" ||
+              dirSource === "tomtom" ||
+              dirSource === "here_places") && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
                     {dirSource === "osm_overpass" ||
                     dirSource === "google_places" ||
-                    dirSource === "foursquare"
+                    dirSource === "foursquare" ||
+                    dirSource === "tomtom" ||
+                    dirSource === "here_places"
                       ? "Category (preset key or free text)"
                       : "Business category"}
                   </label>
@@ -1075,7 +1102,9 @@ function CreateSearchForm({
                         ? "italian, sushi, pizza, brunch"
                         : dirSource === "osm_overpass" ||
                           dirSource === "google_places" ||
-                          dirSource === "foursquare"
+                          dirSource === "foursquare" ||
+                          dirSource === "tomtom" ||
+                          dirSource === "here_places"
                         ? "restaurant, plumber, roofer, hair, dentist"
                         : "HVAC contractor, dentist, gym"
                     }
@@ -1200,7 +1229,9 @@ function CreateSearchForm({
               dirSource === "delivery_marketplace" ||
               dirSource === "google_places" ||
               dirSource === "foursquare" ||
-              dirSource === "bing_places") && (
+              dirSource === "bing_places" ||
+              dirSource === "tomtom" ||
+              dirSource === "here_places") && (
               <details className="rounded-lg border border-cloudy/30 bg-pampas/40">
                 <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-gray-700 flex items-center gap-1.5">
                   <Compass className="w-3.5 h-3.5 text-cloudy" strokeWidth={2} />

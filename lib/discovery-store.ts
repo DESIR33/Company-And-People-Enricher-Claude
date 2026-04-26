@@ -37,7 +37,9 @@ export type DirectorySource =
   | "state_sos"
   | "google_places"
   | "foursquare"
-  | "bing_places";
+  | "bing_places"
+  | "tomtom"
+  | "here_places";
 
 export type DirectoryConfig = {
   source: DirectorySource;

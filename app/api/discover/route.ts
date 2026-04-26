@@ -61,6 +61,8 @@ const DirectoryConfigSchema = z
       "google_places",
       "foursquare",
       "bing_places",
+      "tomtom",
+      "here_places",
     ]),
     category: z.string().trim().max(200).optional(),
     query: z.string().trim().max(500).optional(),
@@ -130,6 +132,16 @@ const DirectoryConfigSchema = z
       if (v.source === "bing_places") {
         // Bing requires a userLocation point — we accept lat/lng directly,
         // a zip we can resolve, or a "near" string the runner can geocode.
+        const hasGeo =
+          (v.lat !== undefined && v.lng !== undefined) ||
+          !!v.geo ||
+          !!v.zips?.length;
+        const hasFilter = !!(v.category || v.query);
+        return hasGeo && hasFilter;
+      }
+      if (v.source === "tomtom" || v.source === "here_places") {
+        // Both APIs are point-anchored — we resolve a lat/lng from the
+        // user's input the same way as the other native connectors.
         const hasGeo =
           (v.lat !== undefined && v.lng !== undefined) ||
           !!v.geo ||

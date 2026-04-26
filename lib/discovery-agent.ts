@@ -820,6 +820,46 @@ Workflow:
 
 Target: ${params.maxResults} Bing Maps-listed businesses.`;
     }
+
+    case "tomtom": {
+      // Normally served by the runner via TomTom Search API. Agent
+      // fallback runs only if TOMTOM_API_KEY is missing or the direct
+      // call failed.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on TomTom maps matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Search TomTom (https://www.tomtom.com/maps/) for the category in the geo.
+2. For each: companyName, websiteUrl, phone, streetAddress, city, region, postalCode, lat, lng.
+3. matchReason MUST cite TomTom and the listing's category.
+4. Skip closed listings.
+
+Target: ${params.maxResults} TomTom-listed businesses.`;
+    }
+
+    case "here_places": {
+      // Normally served by the runner via HERE Discover/Browse APIs.
+      // Agent fallback runs only if HERE_API_KEY is missing or the
+      // direct call failed.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on HERE / Wego maps matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Search HERE / Wego (https://wego.here.com) for the category in the geo. HERE has strong European coverage.
+2. For each: companyName, websiteUrl, phone, streetAddress, city, region, postalCode, lat, lng, countryCode.
+3. matchReason MUST cite HERE / Wego and the listing's category.
+4. Skip closed listings.
+
+Target: ${params.maxResults} HERE-listed businesses.`;
+    }
   }
 }
 

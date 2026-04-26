@@ -122,17 +122,25 @@ export function dedupeById<T>(items: T[], idOf: (item: T) => string): T[] {
 // is — "high" for urban metros, "med" for suburban, "low" for rural. The
 // returned tileMiles balances API cap vs. call count.
 export function suggestedTileMiles(
-  provider: "google_places" | "foursquare" | "yelp" | "bing_places",
+  provider:
+    | "google_places"
+    | "foursquare"
+    | "yelp"
+    | "bing_places"
+    | "tomtom"
+    | "here_places",
   density: "high" | "med" | "low"
 ): number {
   // Caps roughly: google_places nearby = 20, foursquare = 50, yelp = 50,
-  // bing_places = 25. High-cap APIs can use bigger tiles. High-density
-  // areas need smaller.
+  // bing_places = 25, tomtom = 100, here_places = 100. High-cap APIs can
+  // use bigger tiles. High-density areas need smaller.
   const baseByProvider: Record<typeof provider, number> = {
     google_places: 2,
     foursquare: 4,
     yelp: 4,
     bing_places: 2,
+    tomtom: 5,
+    here_places: 5,
   };
   const factor = density === "high" ? 1 : density === "med" ? 2 : 4;
   return baseByProvider[provider] * factor;
