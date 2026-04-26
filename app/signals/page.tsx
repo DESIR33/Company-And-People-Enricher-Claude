@@ -16,10 +16,18 @@ import {
   Trash2,
   Zap,
   Star,
+  Sparkles,
+  BadgeCheck,
 } from "lucide-react";
 import { clsx } from "clsx";
 
-type SignalType = "funding" | "hiring" | "news" | "reviews";
+type SignalType =
+  | "funding"
+  | "hiring"
+  | "news"
+  | "reviews"
+  | "new_business"
+  | "license";
 type Schedule = "manual" | "once" | "daily" | "weekly" | "monthly";
 
 type SignalMonitor = {
@@ -80,9 +88,30 @@ const SIGNAL_META: Record<
     accent: "text-emerald-600",
     smb: false,
   },
+  new_business: {
+    label: "New Business",
+    icon: Sparkles,
+    hint: "Newly registered LLCs/Inc on state Secretary-of-State sites — \"just opened\" signal for SMBs.",
+    accent: "text-fuchsia-600",
+    smb: true,
+  },
+  license: {
+    label: "Newly Licensed",
+    icon: BadgeCheck,
+    hint: "Newly issued or renewed contractor licenses (CSLB, TDLR, DBPR, GA SOS) — strong intent for home services.",
+    accent: "text-blue-600",
+    smb: true,
+  },
 };
 
-const SIGNAL_ORDER: SignalType[] = ["reviews", "news", "hiring", "funding"];
+const SIGNAL_ORDER: SignalType[] = [
+  "reviews",
+  "new_business",
+  "license",
+  "news",
+  "hiring",
+  "funding",
+];
 
 const SCHEDULE_LABEL: Record<Schedule, string> = {
   manual: "Manual only",
@@ -470,10 +499,13 @@ function CreateForm({
   const [keywordsText, setKeywordsText] = useState("");
 
   const [reviewPlatform, setReviewPlatform] =
-    useState<"google" | "yelp" | "any">("google");
+    useState<"google" | "yelp" | "tripadvisor" | "any">("google");
   const [reviewSentiment, setReviewSentiment] =
-    useState<"positive" | "negative" | "any">("any");
+    useState<"positive" | "negative" | "new_on_platform" | "any">("any");
   const [minReviewCount, setMinReviewCount] = useState(3);
+  const [statesText, setStatesText] = useState("");
+  const [naicsText, setNaicsText] = useState("");
+  const [licenseTypesText, setLicenseTypesText] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -502,6 +534,30 @@ function CreateForm({
         .filter(Boolean),
     [keywordsText]
   );
+  const states = useMemo(
+    () =>
+      statesText
+        .split(/[\n,\s]+/)
+        .map((s) => s.trim().toUpperCase())
+        .filter((s) => /^[A-Z]{2}$/.test(s)),
+    [statesText]
+  );
+  const naicsCodes = useMemo(
+    () =>
+      naicsText
+        .split(/[\n,\s]+/)
+        .map((s) => s.trim())
+        .filter((s) => /^\d{2,8}$/.test(s)),
+    [naicsText]
+  );
+  const licenseTypes = useMemo(
+    () =>
+      licenseTypesText
+        .split(/[\n,]/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    [licenseTypesText]
+  );
 
   const submit = async () => {
     setError("");
@@ -512,6 +568,8 @@ function CreateForm({
       return setError("Add at least one news keyword.");
     if (signalType === "reviews" && !geoFilter.trim())
       return setError("Add a geography — reviews-mode is local-business only.");
+    if (signalType === "license" && states.length === 0)
+      return setError("Pick at least one state — license boards are state-scoped.");
 
     const body: Record<string, unknown> = {
       signalType,
@@ -538,6 +596,12 @@ function CreateForm({
       body.reviewPlatform = reviewPlatform;
       body.reviewSentiment = reviewSentiment;
       body.minReviewCount = minReviewCount;
+    } else if (signalType === "new_business") {
+      if (states.length > 0) body.states = states;
+      if (naicsCodes.length > 0) body.naicsCodes = naicsCodes;
+    } else if (signalType === "license") {
+      body.states = states;
+      if (licenseTypes.length > 0) body.licenseTypes = licenseTypes;
     }
 
     setSubmitting(true);
@@ -744,13 +808,16 @@ function CreateForm({
               <select
                 value={reviewPlatform}
                 onChange={(e) =>
-                  setReviewPlatform(e.target.value as "google" | "yelp" | "any")
+                  setReviewPlatform(
+                    e.target.value as "google" | "yelp" | "tripadvisor" | "any"
+                  )
                 }
                 className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
               >
                 <option value="google">Google Business Profile</option>
                 <option value="yelp">Yelp</option>
-                <option value="any">Either</option>
+                <option value="tripadvisor">TripAdvisor</option>
+                <option value="any">Any (Google + Yelp + TripAdvisor)</option>
               </select>
             </div>
             <div>
@@ -761,13 +828,18 @@ function CreateForm({
                 value={reviewSentiment}
                 onChange={(e) =>
                   setReviewSentiment(
-                    e.target.value as "positive" | "negative" | "any"
+                    e.target.value as
+                      | "positive"
+                      | "negative"
+                      | "new_on_platform"
+                      | "any"
                   )
                 }
                 className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
               >
                 <option value="positive">Positive (4–5★) — growth signal</option>
                 <option value="negative">Negative (1–2★) — distress / competitor play</option>
+                <option value="new_on_platform">New on platform — first review inside the timeframe</option>
                 <option value="any">Any fresh review activity</option>
               </select>
             </div>
@@ -787,6 +859,72 @@ function CreateForm({
                 }}
                 className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition tabular"
               />
+            </div>
+          </div>
+        )}
+
+        {signalType === "new_business" && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                States <span className="text-cloudy font-normal">(2-letter, comma-separated; max 10)</span>
+              </label>
+              <input
+                value={statesText}
+                onChange={(e) => setStatesText(e.target.value.toUpperCase())}
+                placeholder="CA, TX, FL, NY, GA"
+                className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm uppercase focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+              />
+              {states.length > 0 && (
+                <p className="text-[11px] text-cloudy mt-1">{states.length} state(s) parsed</p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                NAICS codes <span className="text-cloudy font-normal">(optional — comma-separated)</span>
+              </label>
+              <input
+                value={naicsText}
+                onChange={(e) => setNaicsText(e.target.value)}
+                placeholder="722511, 238220, 561720"
+                className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm tabular focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+              />
+              <p className="text-[11px] text-cloudy mt-1">
+                e.g. 722511 (limited-service restaurants), 238220 (plumbing/HVAC), 561720 (cleaning).
+              </p>
+            </div>
+          </div>
+        )}
+
+        {signalType === "license" && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                States <span className="text-cloudy font-normal">(2-letter, comma-separated; max 10)</span>
+              </label>
+              <input
+                value={statesText}
+                onChange={(e) => setStatesText(e.target.value.toUpperCase())}
+                placeholder="CA, TX, FL, GA"
+                className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm uppercase focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+              />
+              {states.length > 0 && (
+                <p className="text-[11px] text-cloudy mt-1">{states.length} state(s) parsed</p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                License types <span className="text-cloudy font-normal">(optional — comma-separated)</span>
+              </label>
+              <input
+                value={licenseTypesText}
+                onChange={(e) => setLicenseTypesText(e.target.value)}
+                placeholder="general contractor, plumbing, electrical, HVAC, roofing"
+                className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+              />
+              <p className="text-[11px] text-cloudy mt-1">
+                Pulls newly issued or renewed licenses inside the timeframe.
+              </p>
             </div>
           </div>
         )}

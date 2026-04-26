@@ -8,11 +8,19 @@ import {
   setSearchAbort,
   updateSearch,
   type DirectoryConfig,
+  type DiscoveredLead,
   type DiscoveryMode,
   type DirectorySource,
 } from "./discovery-store";
 import { capStatus, getCurrentUsage, recordUsage } from "./usage-store";
 import * as firecrawl from "./firecrawl";
+import {
+  osmBusinessToLeadInput,
+  queryOsmArea,
+  queryOsmRadius,
+} from "./directories/osm-overpass";
+import { getStateRegistry } from "./directories/state-registries";
+import { expandZipsForRadius, lookupZip, parseGeoString } from "./geo";
 
 export type StartSearchResult =
   | { status: "started"; searchId: string }
@@ -34,8 +42,47 @@ export async function executeSearch(
 
   let totalCost = 0;
   let discoveredCount = 0;
+  const insertedLeads: DiscoveredLead[] = [];
 
   try {
+    // ----- Direct API path: OSM Overpass --------------------------------
+    // OSM data is free and structured. When the user picks osm_overpass we
+    // bypass the agent entirely — Overpass returns clean JSON that we
+    // convert directly to lead inserts. This is the cheapest, most
+    // deterministic discovery path in the system.
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "osm_overpass"
+    ) {
+      const osmCount = await runOsmOverpassDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = osmCount;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `OSM Overpass returned ${osmCount} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${osmCount} OSM businesses, $0.00 (free API)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Agent-driven path (every other source/mode) ------------------
     const preFetch = await firecrawlPreFetch(init, abort.signal, (line) =>
       appendDiscoveryLog(searchId, line)
     );
@@ -62,7 +109,7 @@ export async function executeSearch(
 
     for (const c of result.companies) {
       if (abort.signal.aborted) break;
-      insertLead({
+      const { lead, isNew } = insertLead({
         searchId,
         companyName: c.companyName,
         websiteUrl: c.websiteUrl,
@@ -74,8 +121,23 @@ export async function executeSearch(
         matchReason: c.matchReason,
         sourceUrl: c.sourceUrl,
         score: c.score,
+        phone: c.phone,
+        streetAddress: c.streetAddress,
+        city: c.city,
+        region: c.region,
+        postalCode: c.postalCode,
+        countryCode: c.countryCode,
+        lat: c.lat,
+        lng: c.lng,
+        placeId: c.placeId,
+        hours: c.hours,
+        naicsCode: c.naicsCode,
+        licenseNumber: c.licenseNumber,
       });
-      discoveredCount += 1;
+      if (isNew) {
+        insertedLeads.push(lead);
+        discoveredCount += 1;
+      }
     }
 
     const completedAt = Date.now();
@@ -93,6 +155,10 @@ export async function executeSearch(
       searchId,
       `Search ${status}: ${discoveredCount} candidate(s), $${totalCost.toFixed(4)}`
     );
+
+    await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+      appendDiscoveryLog(searchId, line)
+    );
   } catch (err) {
     updateSearch(searchId, {
       status: "failed",
@@ -104,6 +170,170 @@ export async function executeSearch(
     appendDiscoveryLog(searchId, `Search failed: ${String(err)}`);
   } finally {
     clearSearchAbort(searchId);
+  }
+}
+
+// --- OSM Overpass direct path ---------------------------------------------
+// Uses the free Overpass API (no key, no Firecrawl) to pull businesses
+// matching a category inside a radius or named area, then converts each one
+// to a lead row. Returns the number of leads inserted.
+async function runOsmOverpassDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const category = cfg.category ?? cfg.query ?? "";
+  if (!category) {
+    log(`OSM Overpass: no category supplied`);
+    return 0;
+  }
+
+  // Resolve geo. Priority: lat/lng + radius → zip → MSA → city/state.
+  let lat = cfg.lat;
+  let lng = cfg.lng;
+  const radius = cfg.radiusMiles ?? 10;
+  let geoLabel = cfg.geo;
+
+  if ((lat === undefined || lng === undefined) && cfg.geo) {
+    const parsed = parseGeoString(cfg.geo);
+    if (parsed.kind === "zip" || parsed.kind === "latlng") {
+      lat = parsed.lat;
+      lng = parsed.lng;
+      if (parsed.kind === "zip") geoLabel = `${parsed.city}, ${parsed.state} ${parsed.zip}`;
+    }
+  }
+  if ((lat === undefined || lng === undefined) && cfg.zips?.length) {
+    const rec = lookupZip(cfg.zips[0]);
+    if (rec) {
+      lat = rec.lat;
+      lng = rec.lng;
+      geoLabel = `${rec.city}, ${rec.state} ${rec.zip}`;
+    }
+  }
+
+  let businesses: Awaited<ReturnType<typeof queryOsmRadius>> = [];
+
+  if (lat !== undefined && lng !== undefined) {
+    log(`OSM Overpass: querying "${category}" within ${radius} mi of ${lat.toFixed(4)},${lng.toFixed(4)}`);
+    try {
+      businesses = await queryOsmRadius({
+        lat,
+        lng,
+        radiusMiles: radius,
+        category,
+        signal,
+      });
+    } catch (err) {
+      log(`OSM Overpass radius query failed: ${String(err)}`);
+    }
+  } else if (cfg.geo) {
+    // Fallback to area search when no lat/lng available.
+    log(`OSM Overpass: querying "${category}" inside area "${cfg.geo}"`);
+    try {
+      businesses = await queryOsmArea({
+        areaName: cfg.geo,
+        category,
+        signal,
+      });
+    } catch (err) {
+      log(`OSM Overpass area query failed: ${String(err)}`);
+    }
+  } else {
+    log(`OSM Overpass: no geo provided — Overpass requires either lat/lng+radius or an area name`);
+    return 0;
+  }
+
+  if (businesses.length === 0) {
+    log(`OSM Overpass: 0 results — try a different category preset or widen the radius`);
+    return 0;
+  }
+  log(`OSM Overpass: ${businesses.length} candidate(s) before dedup, taking up to ${maxResults}`);
+
+  let inserted = 0;
+  for (const b of businesses.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = osmBusinessToLeadInput(b, searchId, category, geoLabel);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`OSM Overpass: inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- Webhook delivery ------------------------------------------------------
+async function maybeDeliverWebhook(
+  webhookUrl: string | undefined,
+  searchId: string,
+  leads: DiscoveredLead[],
+  log: (line: string) => void
+): Promise<void> {
+  if (!webhookUrl || leads.length === 0) return;
+  let ok = 0;
+  let fail = 0;
+  // Deliveries are independent — fan out concurrently with a small ceiling
+  // so a slow webhook doesn't dominate runtime.
+  const CONCURRENCY = 5;
+  let i = 0;
+  const worker = async () => {
+    while (i < leads.length) {
+      const idx = i++;
+      const lead = leads[idx];
+      const success = await deliverWebhook(webhookUrl, {
+        searchId,
+        leadId: lead.id,
+        companyName: lead.companyName,
+        websiteUrl: lead.websiteUrl,
+        linkedinUrl: lead.linkedinUrl,
+        phone: lead.phone,
+        streetAddress: lead.streetAddress,
+        city: lead.city,
+        region: lead.region,
+        postalCode: lead.postalCode,
+        countryCode: lead.countryCode,
+        lat: lead.lat,
+        lng: lead.lng,
+        location: lead.location,
+        industry: lead.industry,
+        description: lead.description,
+        matchReason: lead.matchReason,
+        sourceUrl: lead.sourceUrl,
+        placeId: lead.placeId,
+        hours: lead.hours,
+        naicsCode: lead.naicsCode,
+        licenseNumber: lead.licenseNumber,
+        score: lead.score,
+        firstSeenAt: lead.firstSeenAt ?? lead.createdAt,
+      });
+      if (success) ok += 1;
+      else fail += 1;
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, leads.length) }, worker)
+  );
+  log(`Webhook: ${ok} delivered, ${fail} failed`);
+}
+
+async function deliverWebhook(
+  url: string,
+  payload: Record<string, unknown>
+): Promise<boolean> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -167,7 +397,9 @@ async function firecrawlPreFetch(
       search.mode === "signal_funding" ||
       search.mode === "signal_hiring" ||
       search.mode === "signal_news" ||
-      search.mode === "signal_reviews"
+      search.mode === "signal_reviews" ||
+      search.mode === "signal_new_business" ||
+      search.mode === "signal_license"
     ) {
       // Signal runs get a Firecrawl search seeded from the rendered queryText
       // — the runner already encodes filters + timeframe in that text.
@@ -206,23 +438,30 @@ async function prefetchForDirectory(
   let costUsd = 0;
   const sections: string[] = [];
 
-  // For sources with a predictable public search URL, scrape it directly.
+  // For sources with a predictable public search URL, scrape it directly via
+  // the cached fallback chain. Cache hits cost nothing; misses fall through
+  // to Firecrawl, then Wayback, then Google cache.
   const directUrl = buildDirectoryUrl(source, cfg);
   if (directUrl) {
     log(`Firecrawl: scraping ${directUrl}`);
-    const { result: scraped, cost } = await firecrawl.scrape(directUrl, {
+    const fallback = await firecrawl.scrapeWithFallback(directUrl, {
       formats: ["markdown", "links"],
       onlyMainContent: true,
       signal,
     });
-    credits += cost.credits;
-    costUsd += cost.costUsd;
-    if (scraped?.markdown) {
-      const truncated = firecrawl.truncateMarkdown(scraped.markdown, MAX_PREFETCH_CHARS);
-      log(`Firecrawl: scraped ${scraped.markdown.length} chars of markdown from ${directUrl}`);
+    credits += fallback.cost.credits;
+    costUsd += fallback.cost.costUsd;
+    if (fallback.fromCache) {
+      log(`Scrape cache HIT for ${directUrl} (source=${fallback.source})`);
+    }
+    if (fallback.result?.markdown) {
+      const truncated = firecrawl.truncateMarkdown(fallback.result.markdown, MAX_PREFETCH_CHARS);
+      log(
+        `Firecrawl: ${fallback.fromCache ? "loaded cached" : "scraped"} ${fallback.result.markdown.length} chars from ${directUrl} (via ${fallback.source})`
+      );
       sections.push(`### Source: ${directUrl}\n\n${truncated}`);
     } else {
-      log(`Firecrawl: scrape returned no markdown for ${directUrl}`);
+      log(`Firecrawl: every fallback tier returned no usable markdown for ${directUrl}`);
     }
 
     // For directory-style roots, follow up with /v1/map to enumerate profile
@@ -269,6 +508,33 @@ async function prefetchForDirectory(
     }
   }
 
+  // For state-scoped directories, sketch in the per-state context the agent
+  // needs (search URL, board name, license types, notes) so it doesn't have
+  // to rediscover them each run.
+  if (source === "state_license_board" || source === "state_sos") {
+    const state = cfg.state;
+    if (state) {
+      const reg = getStateRegistry(state);
+      if (reg) {
+        const e = source === "state_license_board" ? reg.licenseBoard : reg.sos;
+        const block = [
+          `### State registry context: ${reg.stateName}`,
+          source === "state_license_board"
+            ? `Board: ${reg.licenseBoard.boardName}\nLicense types covered: ${reg.licenseBoard.licenseTypes.join(", ")}`
+            : "",
+          `Search URL: ${(e as { searchUrl: string }).searchUrl}`,
+          (e as { needsCaptcha?: boolean }).needsCaptcha
+            ? "Note: this source has CAPTCHA / bot protection — fall back to a Google site:<host> query if direct fetch fails."
+            : "",
+          `Notes: ${(e as { notes: string }).notes}`,
+        ]
+          .filter(Boolean)
+          .join("\n");
+        sections.push(block);
+      }
+    }
+  }
+
   // For custom directories the user may pass only a root URL (no category).
   // When the root URL is present but we couldn't scrape anything above (e.g.
   // the root itself is a thin landing page), still enumerate member URLs via
@@ -286,6 +552,23 @@ async function prefetchForDirectory(
       const trimmed = mapped.links.slice(0, MAX_MAP_URLS_IN_PROMPT);
       log(`Firecrawl: /map enumerated ${mapped.links.length} URL(s), keeping ${trimmed.length}`);
       sections.push(formatMappedUrls(cfg.url, trimmed));
+    }
+  }
+
+  // Geo expansion: if the user provided lat/lng + radius, expand to a list
+  // of bundled US zips and inject them into the prompt context. The agent
+  // can use this list to issue per-zip searches inside a single turn — much
+  // higher coverage than a single city query.
+  if (cfg.lat !== undefined && cfg.lng !== undefined && cfg.radiusMiles) {
+    const zips = expandZipsForRadius(cfg.lat, cfg.lng, cfg.radiusMiles, { limit: 25 });
+    if (zips.length > 0) {
+      const lines = zips
+        .map((z) => `- ${z.zip} (${z.city}, ${z.state}) — ${z.distanceMiles.toFixed(1)} mi`)
+        .join("\n");
+      sections.push(
+        `### Geo expansion: ${zips.length} zip(s) within ${cfg.radiusMiles} mi of ${cfg.lat.toFixed(4)},${cfg.lng.toFixed(4)}\n\n${lines}\n\nUse these zips to expand your search beyond the centre city.`
+      );
+      log(`Geo: expanded radius ${cfg.radiusMiles} mi → ${zips.length} bundled zip(s)`);
     }
   }
 
@@ -307,6 +590,10 @@ function shouldMapDirectory(source: DirectorySource, url: string): boolean {
   if (source === "google_maps") return false;
   if (source === "facebook_pages") return false;
   if (source === "firecrawl_search" || source === "tech_stack") return false;
+  if (source === "google_lsa") return false;
+  if (source === "nextdoor") return false;
+  if (source === "state_license_board" || source === "state_sos") return false;
+  if (source === "delivery_marketplace") return false;
   try {
     const u = new URL(url);
     // yelp/bbb/angi search result pages are paginated — /map would enumerate
@@ -343,7 +630,6 @@ function buildDirectoryUrl(
       return `https://www.bbb.org/search?find_country=USA&find_text=${q(cfg.category ?? cfg.query ?? "")}${cfg.geo ? `&find_loc=${q(cfg.geo)}` : ""}`;
     case "angi":
       if (!cfg.category && !cfg.query) return undefined;
-      // Angi's category search is the most stable of the three.
       return `https://www.angi.com/companylist.htm?searchtext=${q(cfg.category ?? cfg.query ?? "")}${cfg.geo ? `&geolocation=${q(cfg.geo)}` : ""}`;
     case "google_maps":
       if (!cfg.category && !cfg.query) return undefined;
@@ -358,9 +644,32 @@ function buildDirectoryUrl(
       return cfg.category
         ? `https://github.com/topics/${q(cfg.category)}`
         : undefined;
+    case "yellowpages":
+      if (!cfg.category && !cfg.query) return undefined;
+      return `https://www.yellowpages.com/search?search_terms=${q(cfg.category ?? cfg.query ?? "")}${cfg.geo ? `&geo_location_terms=${q(cfg.geo)}` : ""}`;
+    case "manta":
+      if (!cfg.category && !cfg.query) return undefined;
+      return `https://www.manta.com/search?search=${q(cfg.category ?? cfg.query ?? "")}${cfg.geo ? `&search_location=${q(cfg.geo)}` : ""}`;
+    case "houzz":
+      if (!cfg.category && !cfg.query) return undefined;
+      return `https://www.houzz.com/professionals/${q((cfg.category ?? cfg.query ?? "").toLowerCase().replace(/\s+/g, "-"))}/${q(cfg.geo ?? "")}`;
+    case "opentable":
+      return `https://www.opentable.com/s?term=${q(cfg.geo ?? "")}${cfg.category ? `&cuisineIds=${q(cfg.category)}` : ""}`;
+    case "tripadvisor":
+      return `https://www.tripadvisor.com/Search?q=${q(`${cfg.category ?? cfg.query ?? ""} ${cfg.geo ?? ""}`.trim())}`;
+    case "google_lsa":
+      if (!cfg.category && !cfg.query) return undefined;
+      return `https://www.google.com/localservices/prolist?q=${q(`${cfg.category ?? cfg.query} ${cfg.geo ?? ""}`.trim())}`;
+    // Sources without a stable single URL — handled by the agent using the
+    // prompt-level guidance (state registries, marketplaces, Nextdoor, etc.)
     case "facebook_pages":
     case "tech_stack":
     case "firecrawl_search":
+    case "osm_overpass":
+    case "nextdoor":
+    case "delivery_marketplace":
+    case "state_license_board":
+    case "state_sos":
       return undefined;
   }
 }
@@ -386,6 +695,7 @@ export function startSearch(params: {
   seedCompanies?: string[];
   directoryConfig?: DirectoryConfig;
   maxResults: number;
+  webhookUrl?: string;
 }): StartSearchResult {
   const usage = getCurrentUsage();
   const caps = capStatus(usage);
@@ -404,6 +714,7 @@ export function startSearch(params: {
     seedCompanies: params.seedCompanies,
     directoryConfig: params.directoryConfig,
     maxResults: params.maxResults,
+    webhookUrl: params.webhookUrl,
   });
 
   void executeSearch(search.id).catch((err) => {

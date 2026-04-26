@@ -4,7 +4,7 @@ import { extractFirstJsonObject } from "./json-extract";
 import type { DirectoryConfig, DiscoveryMode } from "./discovery-store";
 
 export type SignalAgentConfig = {
-  signalType: "funding" | "hiring" | "news" | "reviews";
+  signalType: "funding" | "hiring" | "news" | "reviews" | "new_business" | "license";
   timeframe: string;
   industryFilter?: string;
   geoFilter?: string;
@@ -14,10 +14,14 @@ export type SignalAgentConfig = {
   maxAmount?: number;
   roles?: string[];
   keywords?: string[];
-  reviewPlatform?: "google" | "yelp" | "any";
-  reviewSentiment?: "positive" | "negative" | "any";
+  reviewPlatform?: "google" | "yelp" | "tripadvisor" | "any";
+  reviewSentiment?: "positive" | "negative" | "new_on_platform" | "any";
   minReviewCount?: number;
+  states?: string[];
+  naicsCodes?: string[];
+  licenseTypes?: string[];
   excludeDomains?: string[];
+  excludePhones?: string[];
 };
 
 export type DiscoveredCompany = {
@@ -31,6 +35,21 @@ export type DiscoveredCompany = {
   matchReason?: string;
   sourceUrl?: string;
   score?: number;
+  // Phase 1.1 — agents are asked to populate these where the source supports
+  // it (Yelp/BBB profiles, state license boards, OSM-derived markdown). The
+  // runner persists them on the lead row.
+  phone?: string;
+  streetAddress?: string;
+  city?: string;
+  region?: string;
+  postalCode?: string;
+  countryCode?: string;
+  lat?: number;
+  lng?: number;
+  placeId?: string;
+  hours?: string;
+  naicsCode?: string;
+  licenseNumber?: string;
 };
 
 export type DiscoveryAgentResult = {
@@ -89,7 +108,19 @@ OUTPUT FORMAT — return ONLY a single JSON object, no prose, no code fences:
       "employeeRange": "10-50",
       "matchReason": "Residential roofing in Austin metro, ~20 employees, matches ICP",
       "sourceUrl": "https://www.google.com/maps/search/roofers+austin",
-      "score": 85
+      "score": 85,
+      "phone": "+1 512-555-0199",
+      "streetAddress": "123 Oltorf St",
+      "city": "Austin",
+      "region": "TX",
+      "postalCode": "78704",
+      "countryCode": "US",
+      "lat": 30.241,
+      "lng": -97.7657,
+      "placeId": "ChIJ...",
+      "hours": "Mon-Fri 8a-5p",
+      "naicsCode": "238160",
+      "licenseNumber": "TX-RC-12345"
     }
   ]
 }
@@ -101,6 +132,14 @@ Rules for fields:
 - score — 0-100 fit score against the ICP; be honest, most candidates are 50-80.
 - sourceUrl — the page where you confirmed the candidate exists.
 - matchReason — one sentence explaining why this company matches the ICP.
+- phone, streetAddress, city, region, postalCode, hours — populate these
+  whenever the source surfaces them (Yelp profile, BBB profile, Google
+  Business Profile, state filings, OSM tags). Do NOT guess. SMB outreach
+  needs phone+address as much as it needs website.
+- placeId — the source's stable identifier (Google place_id, OSM node id,
+  state filing number) when available. Used downstream for dedup.
+- naicsCode / licenseNumber — only include when the source explicitly lists
+  them (state contractor boards, SoS filings).
 
 If you find nothing, return {"note":"...","companies":[]}. DO NOT include markdown.`;
 
@@ -125,9 +164,18 @@ function buildSignalUser(params: DiscoveryParams): string {
   const extra = params.queryText.trim()
     ? `\n\nAdditional ICP constraints: ${params.queryText.trim()}`
     : "";
-  const exclude = cfg.excludeDomains?.length
-    ? `\n\nEXCLUDE these domains (already found in prior runs): ${cfg.excludeDomains.slice(0, 50).join(", ")}`
-    : "";
+  const excludeBits: string[] = [];
+  if (cfg.excludeDomains?.length) {
+    excludeBits.push(
+      `EXCLUDE these domains (already found in prior runs): ${cfg.excludeDomains.slice(0, 50).join(", ")}`
+    );
+  }
+  if (cfg.excludePhones?.length) {
+    excludeBits.push(
+      `EXCLUDE these phone numbers (already found in prior runs): ${cfg.excludePhones.slice(0, 50).join(", ")}`
+    );
+  }
+  const exclude = excludeBits.length ? `\n\n${excludeBits.join("\n")}` : "";
 
   if (cfg.signalType === "funding") {
     return `Find up to ${params.maxResults} companies that recently raised funding within ${cfg.timeframe}.
@@ -167,13 +215,24 @@ Target: ${params.maxResults} companies hiring within the timeframe.`;
     const platformLabel =
       platform === "google" ? "Google Maps / Google Business Profile" :
       platform === "yelp" ? "Yelp" :
-      "Google + Yelp";
+      platform === "tripadvisor" ? "TripAdvisor" :
+      "Google + Yelp + TripAdvisor";
     const sentimentGuidance =
       sentiment === "positive"
         ? "Only include businesses with recent POSITIVE reviews (4★ or 5★). Lots of recent positive reviews = growth + reachable, engaged owner."
         : sentiment === "negative"
           ? "Only include businesses with recent NEGATIVE reviews (1★ or 2★). Recent negative reviews = distress / churn risk — often an opportunity pitch for competitors."
-          : "Include businesses with either recent positive OR negative reviews — volume change is the intent signal.";
+          : sentiment === "new_on_platform"
+            ? "Only include businesses that JUST APPEARED on the platform within the timeframe — first review, claimed-listing date, or page-creation date inside the timeframe. New-on-platform = brand-new business or a long-time business that just started caring about online presence (perfect time to pitch SaaS / marketing)."
+            : "Include businesses with either recent positive OR negative reviews — volume change is the intent signal.";
+    const platformSpecific =
+      platform === "tripadvisor"
+        ? "Use https://www.tripadvisor.com/Search?q=<category>+<geo> — TripAdvisor surfaces hotels/restaurants/tours best."
+        : platform === "yelp"
+          ? "Use Yelp category search at https://www.yelp.com/search?find_desc=<category>&find_loc=<geo>."
+          : platform === "google"
+            ? "Use Google Maps search and the Google Business Profile listing for each candidate."
+            : "Use Google Maps + Yelp + TripAdvisor and dedupe across them by phone/address.";
     return `Find up to ${params.maxResults} local businesses that have fresh review activity within ${cfg.timeframe}.
 
 Platform: ${platformLabel}
@@ -184,13 +243,59 @@ Filters: ${filters}${extra}${exclude}
 ${sentimentGuidance}
 
 Workflow:
-1. Use Google Maps search and Yelp category pages filtered by the geography and industry above.
-2. For each candidate, WebFetch the Google Business Profile / Yelp page and check the recent review dates.
-3. Require at least ${minCount} reviews within ${cfg.timeframe}.
-4. matchReason MUST cite the review count and sentiment — e.g. "7 Google reviews in the last 14 days, avg 4.8★" or "3 new 1★ reviews citing long wait times".
-5. Return websiteUrl, google_business_url (as sourceUrl), location, and a score that reflects fit + review momentum.
+1. ${platformSpecific}
+2. For each candidate, WebFetch the platform profile and check recent review dates / first-review date.
+3. Require at least ${minCount} reviews within ${cfg.timeframe} (skip the count check for new_on_platform sentiment).
+4. matchReason MUST cite the platform, review count, and sentiment — e.g. "7 Google reviews in the last 14 days, avg 4.8★" or "First review 6 days ago — new on TripAdvisor".
+5. Capture phone + streetAddress when shown on the profile (these are SMB outreach essentials). Use sourceUrl for the profile URL, and a score that reflects fit + review momentum.
 
 Target: ${params.maxResults} local businesses with fresh review activity.`;
+  }
+
+  if (cfg.signalType === "new_business") {
+    const states = cfg.states?.length
+      ? `States: ${cfg.states.join(", ")}`
+      : "Geography: any";
+    const naics = cfg.naicsCodes?.length
+      ? `NAICS codes: ${cfg.naicsCodes.join(", ")}`
+      : "NAICS: any (filter by category in queryText if provided)";
+    return `Find up to ${params.maxResults} businesses NEWLY REGISTERED within ${cfg.timeframe}.
+
+${states}
+${naics}
+Filters: ${filters}${extra}${exclude}
+
+Workflow:
+1. Pull state Secretary-of-State filings: CA BizFile Online, TX SOS, FL Sunbiz (search.sunbiz.org), NY DOS Entity Search, GA eCorp. Where each state exposes a date-range filter, restrict to ${cfg.timeframe}.
+2. Cross-check with "grand opening" / "now open" Google news for the geo + category — many newly opened businesses appear in local press before they hit directories.
+3. For each: companyName, streetAddress, city, region, postalCode, entity type, formation date, NAICS (if listed), placeId = filing number, score 70+.
+4. matchReason MUST include the formation date and source — e.g. "LLC filed 2026-04-08 in Travis Co, TX (TX SOS) · grand opening covered by Austin Business Journal 2026-04-12".
+5. Skip dissolved or inactive filings, and out-of-state shells with PO box only.
+
+Target: ${params.maxResults} newly registered businesses.`;
+  }
+
+  if (cfg.signalType === "license") {
+    const states = cfg.states?.length
+      ? `States: ${cfg.states.join(", ")}`
+      : "Geography: any";
+    const types = cfg.licenseTypes?.length
+      ? `License types: ${cfg.licenseTypes.join(", ")}`
+      : "License type: any";
+    return `Find up to ${params.maxResults} contractors with a license issued or renewed within ${cfg.timeframe}.
+
+${states}
+${types}
+Filters: ${filters}${extra}${exclude}
+
+Workflow:
+1. Use state contractor-license boards: CA CSLB, TX TDLR, FL DBPR, NY DOS Licensing, GA SOS Verify. Most expose a search by issue date.
+2. For each license record: companyName, phone (when listed), streetAddress, city, region, licenseNumber, license type/classification, issue date.
+3. matchReason MUST include the license number, board, type, and issue date — e.g. "CSLB #1234567, C-36 Plumbing, issued 2026-04-01".
+4. A newly-issued license is one of the strongest "just-licensed, needs leads/software/insurance" buying signals — score 80+ for fresh issues, 65 for recent renewals.
+5. Skip expired/revoked. Dedupe by license number.
+
+Target: ${params.maxResults} freshly licensed contractors.`;
   }
 
   // news
@@ -208,6 +313,22 @@ Workflow:
 4. Skip companies already in the exclude list.
 
 Target: ${params.maxResults} companies with a fresh news signal.`;
+}
+
+function renderGeoBlock(cfg: DirectoryConfig): string {
+  // Compose a one-line geo description that surfaces every input the user
+  // provided — agents work much better when given lat/lng + radius + zip
+  // list together instead of just a city name.
+  const parts: string[] = [];
+  if (cfg.lat !== undefined && cfg.lng !== undefined) {
+    parts.push(`lat/lng ${cfg.lat.toFixed(4)},${cfg.lng.toFixed(4)}`);
+  }
+  if (cfg.radiusMiles !== undefined) parts.push(`${cfg.radiusMiles} mi radius`);
+  if (cfg.zips?.length) parts.push(`zips ${cfg.zips.slice(0, 12).join(", ")}`);
+  if (cfg.msaCode) parts.push(`MSA ${cfg.msaCode}`);
+  if (cfg.geo) parts.push(cfg.geo);
+  if (cfg.state && !cfg.geo?.toUpperCase().includes(cfg.state)) parts.push(cfg.state);
+  return parts.length === 0 ? "(none)" : parts.join(" · ");
 }
 
 function buildDirectoryUser(params: DiscoveryParams): string {
@@ -427,6 +548,219 @@ Workflow:
 
 Target: ${params.maxResults} companies from the directory.`;
     }
+
+    case "osm_overpass": {
+      // OSM is normally fetched directly by the runner (no agent loop). This
+      // case fires only as a fallback when the runner sees a category that's
+      // not in OSM_CATEGORY_PRESETS and the radius/area query returned 0
+      // results — agent then takes over with WebSearch over openstreetmap.org.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses in OpenStreetMap matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Try Nominatim search (https://nominatim.openstreetmap.org/search) for the category in the geo, JSON output.
+2. For each result, capture name, websiteUrl, phone, streetAddress, city, region, postalCode, lat, lng — these come straight from OSM tags.
+3. Skip nodes without a name or contact info.
+4. matchReason MUST cite OSM (e.g. "OSM node 12345, tagged shop=plumber").
+
+Target: ${params.maxResults} OSM-listed businesses.`;
+    }
+
+    case "google_lsa": {
+      // Google Local Services Ads — Google's vetted, license-verified pro
+      // listings. Ultra-high intent for home services (plumbers, HVAC,
+      // electricians, roofers, etc.) because Google has already verified
+      // the business is licensed and insured.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} Google-verified local pros from Google Local Services Ads.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Query https://www.google.com/localservices/prolist?q=${encodeURIComponent(`${category} ${cfg.geo ?? ""}`)} (LSA pro list page).
+2. Each LSA card shows business name, phone, rating, "Google Guaranteed" or "Google Screened" badge, service area.
+3. Capture: companyName, phone, streetAddress (when shown), city, region, score (start at 80 — these are Google-vetted).
+4. matchReason MUST mention the Google Guaranteed/Screened status — e.g. "Google Guaranteed plumber, 4.9★ over 234 reviews".
+5. The LSA pages are JS-heavy. If the direct fetch is blocked, fall back to a Google search: "<category> <geo> google guaranteed".
+6. Skip pros with fewer than 5 reviews — usually too new to outreach.
+
+Target: ${params.maxResults} Google-verified pros (highest-intent SMB lead source).`;
+    }
+
+    case "yellowpages": {
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on Yellow Pages (yellowpages.com).
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Start at https://www.yellowpages.com/search?search_terms=${encodeURIComponent(category)}&geo_location_terms=${encodeURIComponent(cfg.geo ?? "")}.
+2. Yellow Pages is one of the broadest US SMB directories — list pages paginate cleanly.
+3. For each listing capture: business name, phone, streetAddress, city, region, postalCode, websiteUrl (when listed), rating, review count, years in business.
+4. Prefer listings with ≥3 years in business and a phone — solo / new listings are noisier.
+5. matchReason MUST cite the YP listing position and any "AYP" (Authorized Yellow Pages) badge — e.g. "YP #4, AYP-verified, 8 years in business".
+6. If YP blocks the fetch, fall back to a Google query: "<category> <geo> site:yellowpages.com".
+
+Target: ${params.maxResults} YP-listed businesses.`;
+    }
+
+    case "manta": {
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on Manta (manta.com), a US SMB directory with NAICS codes.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Start at https://www.manta.com/search?search=${encodeURIComponent(category)}&search_location=${encodeURIComponent(cfg.geo ?? "")}.
+2. Manta profiles include NAICS code, year established, employee range, annual revenue band — capture all of these when present (naicsCode, employeeRange).
+3. For each listing: business name, phone, streetAddress, city, region, postalCode, websiteUrl, naicsCode, employeeRange.
+4. matchReason MUST cite the NAICS classification when available — e.g. "Manta-listed, NAICS 238220, est. 2014, 5-10 employees".
+5. If Manta blocks the fetch, fall back to a Google query: "<category> <geo> site:manta.com".
+
+Target: ${params.maxResults} Manta-listed SMBs.`;
+    }
+
+    case "houzz": {
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} home pros (designers, contractors, landscapers, remodelers) on Houzz.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Start at https://www.houzz.com/professionals/${encodeURIComponent(category.toLowerCase().replace(/\s+/g, "-"))}/${encodeURIComponent(cfg.geo ?? "")}.
+2. Houzz pro profiles include portfolio photos, project count, review rating, years on Houzz, badges (Best of Houzz).
+3. For each listing: companyName, phone, streetAddress, city, region, websiteUrl, score reflecting badges + reviews.
+4. matchReason MUST cite Houzz badges and project volume — e.g. "Best of Houzz 2024, 47 projects on Houzz, 4.9★".
+5. Skip pros with fewer than 5 projects — too thin for outreach.
+
+Target: ${params.maxResults} Houzz home pros.`;
+    }
+
+    case "nextdoor": {
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} local SMBs on Nextdoor's business pages. NOTE: Nextdoor aggressively blocks unauthenticated fetches — best-effort only.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Search Google for "site:nextdoor.com/pages/ <category> <geo>" — pages indexed there are publicly readable.
+2. Each Nextdoor business page shows recommendation count, badges, response time, sometimes phone + website.
+3. For each: companyName, phone, streetAddress (often partial), city, region, websiteUrl, score reflecting recommendation count.
+4. matchReason MUST cite the Nextdoor recommendation count — e.g. "Recommended by 38 neighbours on Nextdoor".
+5. If you can't reach Nextdoor or Google has too few indexed pages, return what you have honestly. This source is best-effort like LinkedIn.
+
+Target: up to ${params.maxResults} Nextdoor-recommended SMBs (best-effort).`;
+    }
+
+    case "opentable": {
+      const category = cfg.category ?? cfg.query ?? "restaurant";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} restaurants on OpenTable.
+
+Cuisine / category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Start at https://www.opentable.com/s?term=${encodeURIComponent(cfg.geo ?? "")}&cuisineIds=${encodeURIComponent(category)}.
+2. Each OpenTable card includes restaurant name, address, phone, cuisine, price tier, review count.
+3. For each: companyName, phone, streetAddress, city, region, postalCode, websiteUrl, hours, score reflecting review count + tier.
+4. matchReason MUST cite the OpenTable review count + cuisine — e.g. "Italian, 4.6★ over 1,200 OpenTable reviews".
+5. Skip national chains; focus on independents.
+
+Target: ${params.maxResults} OpenTable-listed restaurants.`;
+    }
+
+    case "tripadvisor": {
+      const category = cfg.category ?? cfg.query ?? "restaurant";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} hospitality businesses on TripAdvisor.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Start at https://www.tripadvisor.com/Search?q=${encodeURIComponent(`${category} ${cfg.geo ?? ""}`)} or browse by category (Restaurants_g123/Hotels_g123).
+2. TripAdvisor profiles include name, address, phone, rating, review count, ranking ("#7 of 320 restaurants in Atlanta").
+3. For each: companyName, phone, streetAddress, city, region, postalCode, websiteUrl, score reflecting ranking + review count.
+4. matchReason MUST cite the TripAdvisor ranking — e.g. "#23 of 412 restaurants in Atlanta, 4.5★, 890 reviews".
+5. If TripAdvisor blocks the fetch, fall back to "site:tripadvisor.com <category> <geo>" via Google.
+
+Target: ${params.maxResults} TripAdvisor-listed hospitality businesses.`;
+    }
+
+    case "delivery_marketplace": {
+      const category = cfg.category ?? cfg.query ?? "restaurant";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} restaurants/businesses listed on at least one of the major US delivery marketplaces (DoorDash, Uber Eats, Grubhub).
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Try all three: https://www.doordash.com/store-search/?query=${encodeURIComponent(`${category} ${cfg.geo ?? ""}`)}, https://www.ubereats.com/search?q=${encodeURIComponent(`${category} ${cfg.geo ?? ""}`)}, and https://www.grubhub.com/search?searchType=keyword&search_terms=${encodeURIComponent(category)}&location=${encodeURIComponent(cfg.geo ?? "")}.
+2. Listings on these platforms are *signed up* — every one is reachable for outreach (delivery sales, marketing, software).
+3. For each: companyName, phone (often missing — sourceUrl OK), streetAddress, city, region, websiteUrl, score reflecting cross-platform presence (3 platforms = 90, 1 = 60).
+4. matchReason MUST cite which marketplaces list the business — e.g. "Listed on DoorDash + Grubhub, 4.7★ on DD".
+5. Dedupe across marketplaces by name+address normalisation.
+
+Target: ${params.maxResults} marketplace-active SMBs (great for vendor/SaaS pitches).`;
+    }
+
+    case "state_license_board": {
+      const state = cfg.state ?? "(none)";
+      const licenseType = cfg.category ?? cfg.query ?? "(any license type)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} licensed businesses from a state contractor-license board.
+
+State: ${state}
+License type: ${licenseType}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Use the state-specific board search. Common ones: CA CSLB (https://www.cslb.ca.gov/OnlineServices/CheckLicenseII/), TX TDLR (https://www.tdlr.texas.gov/LicenseSearch/), FL DBPR (https://www.myfloridalicense.com/wl11.asp), NY DOS Licensing, GA SOS Verify (https://verify.sos.ga.gov/verification/Search.aspx).
+2. License records include businessName, licenseNumber, licenseType, status (active/expired), issue date, address, phone (sometimes).
+3. For each: companyName, phone (when listed), streetAddress, city, region, postalCode, licenseNumber, naicsCode (if classification given), score 70+ (active license = qualified lead).
+4. matchReason MUST include the license number, type, and issue date — e.g. "TX-RC-12345, plumbing license, issued 2024-03-12".
+5. Prefer recently issued / renewed licenses (last 90 days) when timeframe applies.
+6. Skip expired or revoked licenses.
+
+Target: ${params.maxResults} actively-licensed businesses.`;
+    }
+
+    case "state_sos": {
+      const state = cfg.state ?? "(none)";
+      const naics = cfg.category ?? cfg.query ?? "(any industry)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses recently registered with a state Secretary of State.
+
+State: ${state}
+NAICS / industry: ${naics}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Use the state-specific filings search. Common ones: CA BizFile Online (https://bizfileonline.sos.ca.gov), TX Comptroller (https://mycpa.cpa.state.tx.us/coa/), FL Sunbiz (https://search.sunbiz.org), NY DOS Entity Search, GA eCorp (https://ecorp.sos.ga.gov/BusinessSearch).
+2. SoS filings include entity name, formation date, registered agent, principal address, entity type (LLC/Inc/PLLC), status.
+3. Filter to entities formed within the timeframe and matching the NAICS / industry where data is exposed.
+4. For each: companyName, streetAddress (principal address), city, region, postalCode, naicsCode (if listed), placeId (filing #), score 70+ (newly formed = high intent).
+5. matchReason MUST include formation date and entity type — e.g. "LLC formed 2026-04-02 in Travis County, TX".
+6. Skip dissolved or inactive filings.
+
+Target: ${params.maxResults} newly registered businesses.`;
+    }
   }
 }
 
@@ -442,7 +776,9 @@ function buildPrompts(params: DiscoveryParams): { system: string; user: string }
     params.mode === "signal_funding" ||
     params.mode === "signal_hiring" ||
     params.mode === "signal_news" ||
-    params.mode === "signal_reviews"
+    params.mode === "signal_reviews" ||
+    params.mode === "signal_new_business" ||
+    params.mode === "signal_license"
   ) {
     if (!params.signalConfig) {
       throw new Error("signalConfig is required for signal_* modes");
@@ -545,6 +881,10 @@ function normaliseCompany(c: Partial<DiscoveredCompany>): DiscoveredCompany | un
     rawScore === undefined
       ? undefined
       : Math.max(0, Math.min(100, Math.round(rawScore)));
+  const lat =
+    typeof c.lat === "number" && c.lat >= -90 && c.lat <= 90 ? c.lat : undefined;
+  const lng =
+    typeof c.lng === "number" && c.lng >= -180 && c.lng <= 180 ? c.lng : undefined;
   return {
     companyName: name,
     websiteUrl: website,
@@ -556,6 +896,18 @@ function normaliseCompany(c: Partial<DiscoveredCompany>): DiscoveredCompany | un
     matchReason: c.matchReason?.trim() || undefined,
     sourceUrl: cleanUrl(c.sourceUrl),
     score,
+    phone: c.phone?.toString().trim() || undefined,
+    streetAddress: c.streetAddress?.trim() || undefined,
+    city: c.city?.trim() || undefined,
+    region: c.region?.trim() || undefined,
+    postalCode: c.postalCode?.toString().trim() || undefined,
+    countryCode: c.countryCode?.trim() || undefined,
+    lat,
+    lng,
+    placeId: c.placeId?.trim() || undefined,
+    hours: c.hours?.trim() || undefined,
+    naicsCode: c.naicsCode?.toString().trim() || undefined,
+    licenseNumber: c.licenseNumber?.toString().trim() || undefined,
   };
 }
 

@@ -376,6 +376,151 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+// ---------- /scrape-with-fallback ----------
+// Anti-bot tier: when the primary scrape returns empty markdown (Firecrawl
+// can return success with no content if the site blocks at render time) or
+// throws, fall back through:
+//   1. Wayback Machine — fetch the most recent archived snapshot of the URL.
+//   2. Google web cache — fetch googleusercontent.com cached version.
+// Both fallbacks are themselves Firecrawl scrapes, so they need a key. With
+// no key configured the function returns null after the primary attempt.
+//
+// The cache layer (scrape-cache.ts) wraps this whole chain so even slow
+// fallbacks only happen once per (url, opts) per TTL window.
+
+import {
+  getCachedScrape,
+  setCachedScrape,
+  type ScrapeSource,
+} from "./scrape-cache";
+
+export type FallbackOutcome = {
+  result: FirecrawlScrapeResult | null;
+  cost: FirecrawlCost;
+  source: ScrapeSource | "miss";
+  fromCache: boolean;
+};
+
+export async function scrapeWithFallback(
+  url: string,
+  opts: {
+    formats?: Array<"markdown" | "html" | "links">;
+    onlyMainContent?: boolean;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    skipCache?: boolean;
+  } = {}
+): Promise<FallbackOutcome> {
+  const cacheOpts = {
+    formats: opts.formats ?? ["markdown", "links"],
+    onlyMainContent: opts.onlyMainContent ?? true,
+  };
+
+  // 1. Cache. Hits return $0 and skip the whole fallback chain.
+  if (!opts.skipCache) {
+    const cached = getCachedScrape(url, cacheOpts);
+    if (cached) {
+      return {
+        result: {
+          url,
+          markdown: cached.contentType === "markdown" ? cached.content : undefined,
+          html: cached.contentType === "html" ? cached.content : undefined,
+        },
+        cost: emptyCost(),
+        source: cached.source,
+        fromCache: true,
+      };
+    }
+  }
+
+  if (!isConfigured()) {
+    return { result: null, cost: emptyCost(), source: "miss", fromCache: false };
+  }
+
+  let totalCredits = 0;
+  let totalCostUsd = 0;
+
+  // 2. Direct Firecrawl scrape.
+  try {
+    const direct = await scrape(url, opts);
+    totalCredits += direct.cost.credits;
+    totalCostUsd += direct.cost.costUsd;
+    if (direct.result?.markdown && direct.result.markdown.trim().length >= 200) {
+      setCachedScrape(url, direct.result.markdown, {
+        contentType: "markdown",
+        source: "firecrawl",
+        scrapeOpts: cacheOpts,
+      });
+      return {
+        result: direct.result,
+        cost: { credits: totalCredits, costUsd: totalCostUsd },
+        source: "firecrawl",
+        fromCache: false,
+      };
+    }
+  } catch {
+    // Fall through to Wayback. The error itself isn't surfaced because the
+    // fallback chain is the response — caller will see source: "miss" if
+    // every tier fails.
+  }
+
+  // 3. Wayback Machine. The available API redirects to the latest snapshot
+  // when given a URL, so we can scrape that snapshot URL the same way.
+  try {
+    const wb = `https://web.archive.org/web/2y/${url}`;
+    const wayback = await scrape(wb, opts);
+    totalCredits += wayback.cost.credits;
+    totalCostUsd += wayback.cost.costUsd;
+    if (wayback.result?.markdown && wayback.result.markdown.trim().length >= 200) {
+      setCachedScrape(url, wayback.result.markdown, {
+        contentType: "markdown",
+        source: "wayback",
+        scrapeOpts: cacheOpts,
+      });
+      return {
+        result: { ...wayback.result, url },
+        cost: { credits: totalCredits, costUsd: totalCostUsd },
+        source: "wayback",
+        fromCache: false,
+      };
+    }
+  } catch {
+    // Fall through to Google cache.
+  }
+
+  // 4. Google cache. Hit-or-miss; many pages are no longer indexed.
+  try {
+    const gc = `https://webcache.googleusercontent.com/search?q=cache:${encodeURIComponent(
+      url
+    )}`;
+    const cache = await scrape(gc, opts);
+    totalCredits += cache.cost.credits;
+    totalCostUsd += cache.cost.costUsd;
+    if (cache.result?.markdown && cache.result.markdown.trim().length >= 200) {
+      setCachedScrape(url, cache.result.markdown, {
+        contentType: "markdown",
+        source: "google_cache",
+        scrapeOpts: cacheOpts,
+      });
+      return {
+        result: { ...cache.result, url },
+        cost: { credits: totalCredits, costUsd: totalCostUsd },
+        source: "google_cache",
+        fromCache: false,
+      };
+    }
+  } catch {
+    // Final tier — fall through.
+  }
+
+  return {
+    result: null,
+    cost: { credits: totalCredits, costUsd: totalCostUsd },
+    source: "miss",
+    fromCache: false,
+  };
+}
+
 // ---------- helpers ----------
 
 export function truncateMarkdown(md: string | undefined, maxChars: number): string {

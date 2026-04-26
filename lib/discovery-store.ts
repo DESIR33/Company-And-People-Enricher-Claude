@@ -8,6 +8,8 @@ export type DiscoveryMode =
   | "signal_hiring"
   | "signal_news"
   | "signal_reviews"
+  | "signal_new_business"
+  | "signal_license"
   | "directory";
 
 export type DirectorySource =
@@ -21,7 +23,18 @@ export type DirectorySource =
   | "bbb"
   | "angi"
   | "facebook_pages"
-  | "firecrawl_search";
+  | "firecrawl_search"
+  | "osm_overpass"
+  | "google_lsa"
+  | "yellowpages"
+  | "manta"
+  | "houzz"
+  | "nextdoor"
+  | "opentable"
+  | "tripadvisor"
+  | "delivery_marketplace"
+  | "state_license_board"
+  | "state_sos";
 
 export type DirectoryConfig = {
   source: DirectorySource;
@@ -31,6 +44,18 @@ export type DirectoryConfig = {
   url?: string;
   techStack?: string;
   batch?: string;
+  // Geo precision (Phase 1.3). When `lat`/`lng` are set, the runner can fan a
+  // single search out into multiple zip-scoped queries up to `radiusMiles`. If
+  // `zips[]` is set explicitly, the fan-out uses that list verbatim. `msaCode`
+  // (CBSA code, e.g. "19100" for DFW) expands to its constituent zips.
+  lat?: number;
+  lng?: number;
+  radiusMiles?: number;
+  zips?: string[];
+  msaCode?: string;
+  // For state-scoped directories (state_license_board, state_sos): two-letter
+  // postal abbreviation, e.g. "CA", "TX".
+  state?: string;
 };
 
 export type DiscoveryStatus =
@@ -60,6 +85,7 @@ export type DiscoverySearch = {
   agentNote?: string;
   error?: string;
   parentMonitorId?: string;
+  webhookUrl?: string;
 };
 
 export type DiscoveredLead = {
@@ -76,6 +102,23 @@ export type DiscoveredLead = {
   sourceUrl?: string;
   score?: number;
   createdAt: number;
+  // Phase 1.1: NAP + structured fields. Populated where the source provides
+  // them (OSM Overpass, Yelp scrape, BBB profile, state filings) so the CRM
+  // gets enrichment-grade data on first pass instead of needing a follow-up
+  // multi-channel run.
+  phone?: string;
+  streetAddress?: string;
+  city?: string;
+  region?: string;
+  postalCode?: string;
+  countryCode?: string;
+  lat?: number;
+  lng?: number;
+  placeId?: string;
+  hours?: string;
+  naicsCode?: string;
+  licenseNumber?: string;
+  firstSeenAt?: number;
 };
 
 type SearchRow = {
@@ -98,6 +141,7 @@ type SearchRow = {
   agent_note: string | null;
   error: string | null;
   parent_monitor_id: string | null;
+  webhook_url: string | null;
 };
 
 type LeadRow = {
@@ -114,6 +158,20 @@ type LeadRow = {
   source_url: string | null;
   score: number | null;
   created_at: number;
+  phone: string | null;
+  street_address: string | null;
+  city: string | null;
+  region: string | null;
+  postal_code: string | null;
+  country_code: string | null;
+  lat: number | null;
+  lng: number | null;
+  place_id: string | null;
+  hours: string | null;
+  naics_code: string | null;
+  license_number: string | null;
+  first_seen_at: number | null;
+  identity_key: string | null;
 };
 
 function searchFromRow(r: SearchRow): DiscoverySearch {
@@ -137,6 +195,7 @@ function searchFromRow(r: SearchRow): DiscoverySearch {
     agentNote: r.agent_note ?? undefined,
     error: r.error ?? undefined,
     parentMonitorId: r.parent_monitor_id ?? undefined,
+    webhookUrl: r.webhook_url ?? undefined,
   };
 }
 
@@ -155,7 +214,125 @@ function leadFromRow(r: LeadRow): DiscoveredLead {
     sourceUrl: r.source_url ?? undefined,
     score: r.score ?? undefined,
     createdAt: r.created_at,
+    phone: r.phone ?? undefined,
+    streetAddress: r.street_address ?? undefined,
+    city: r.city ?? undefined,
+    region: r.region ?? undefined,
+    postalCode: r.postal_code ?? undefined,
+    countryCode: r.country_code ?? undefined,
+    lat: r.lat ?? undefined,
+    lng: r.lng ?? undefined,
+    placeId: r.place_id ?? undefined,
+    hours: r.hours ?? undefined,
+    naicsCode: r.naics_code ?? undefined,
+    licenseNumber: r.license_number ?? undefined,
+    firstSeenAt: r.first_seen_at ?? undefined,
   };
+}
+
+// --------------------------------------------------------------------------
+// Identity-based dedup (Phase 1.2)
+// --------------------------------------------------------------------------
+// SMB directories list the same business under different domains, different
+// company-name spellings (LLC vs Inc vs DBA), or with no website at all. So
+// dedup by website hostname alone collapses the wrong rows. The canonical key
+// is "phone OR (address+name)" — both extremely stable identifiers — falling
+// back to "domain" and finally "name". Whatever we pick, every row that maps
+// to the same physical business gets the same key.
+//
+// Phone normalization: strip everything non-digit, drop a leading "1" so
+// `+1 (404) 555-1234` and `4045551234` collapse. Address normalization:
+// lowercase, strip suite/apt/unit/floor/#, collapse whitespace, drop trailing
+// punctuation. Name normalization: lowercase, strip common entity suffixes
+// (LLC, Inc, Co, Corp, Ltd) and punctuation.
+
+const ENTITY_SUFFIXES_RE =
+  /\s+(llc|l\.l\.c\.|inc|inc\.|incorporated|co|co\.|corp|corp\.|corporation|ltd|ltd\.|plc|pllc|pc|limited)$/i;
+
+// Suite-style locator regex. Longer alternatives MUST come first so `floor`
+// matches before `fl`, otherwise `fl` greedily consumes the `fl` prefix of
+// `floor` and the trailing `oor 2` survives as an apparent unit number.
+// Also strip leading street-direction tokens that appear after the keyword.
+const SUITE_RE =
+  /\b(apartment|suite|floor|ste|apt|unit|fl|#|no\.?)\s*[a-z0-9-]+\b/gi;
+
+// Common abbreviation pairs we want to fold so "St" / "Street" / "Ave" /
+// "Avenue" don't fingerprint as different addresses.
+const STREET_ABBREV: Array<[RegExp, string]> = [
+  [/\bstreet\b/gi, "st"],
+  [/\bavenue\b/gi, "ave"],
+  [/\bboulevard\b/gi, "blvd"],
+  [/\bdrive\b/gi, "dr"],
+  [/\broad\b/gi, "rd"],
+  [/\bcourt\b/gi, "ct"],
+  [/\bplace\b/gi, "pl"],
+  [/\blane\b/gi, "ln"],
+  [/\bhighway\b/gi, "hwy"],
+];
+
+export function normalizePhone(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return undefined;
+  // Drop a leading 1 only if the result is 11 digits starting with 1
+  // (US/CA NANP). Other 11-digit numbers (e.g. UK +44...) are kept as-is.
+  if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
+  return digits;
+}
+
+export function normalizeAddress(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  let s = raw.toLowerCase();
+  for (const [re, sub] of STREET_ABBREV) s = s.replace(re, sub);
+  return (
+    s
+      .replace(SUITE_RE, " ")
+      .replace(/[.,]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || undefined
+  );
+}
+
+export function normalizeName(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  return (
+    raw
+      .toLowerCase()
+      .replace(ENTITY_SUFFIXES_RE, "")
+      // Strip apostrophes and quotes BEFORE collapsing other punctuation to
+      // spaces — otherwise "Joe's" turns into "joe s" instead of "joes".
+      .replace(/['’`"]/g, "")
+      .replace(/[^a-z0-9 ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || undefined
+  );
+}
+
+export function normalizeDomain(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  try {
+    return new URL(raw).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+export function canonicalLeadKey(input: {
+  companyName?: string;
+  websiteUrl?: string;
+  phone?: string;
+  streetAddress?: string;
+  postalCode?: string;
+}): string {
+  const phone = normalizePhone(input.phone);
+  if (phone) return `phone:${phone}`;
+  const addr = normalizeAddress(input.streetAddress);
+  const name = normalizeName(input.companyName);
+  if (addr && name) return `addr:${name}|${addr}|${input.postalCode ?? ""}`;
+  const dom = normalizeDomain(input.websiteUrl);
+  if (dom) return `dom:${dom}`;
+  if (name) return `name:${name}`;
+  return `id:${uuidv4()}`;
 }
 
 export function createSearch(params: {
@@ -167,6 +344,7 @@ export function createSearch(params: {
   directoryConfig?: DirectoryConfig;
   maxResults: number;
   parentMonitorId?: string;
+  webhookUrl?: string;
 }): DiscoverySearch {
   const db = getDb();
   const id = uuidv4();
@@ -174,9 +352,9 @@ export function createSearch(params: {
   db.prepare(
     `INSERT INTO discovery_searches (
       id, workspace_id, mode, name, query_text, seed_companies, directory_config, max_results, status,
-      created_at, updated_at, parent_monitor_id
+      created_at, updated_at, parent_monitor_id, webhook_url
     ) VALUES (@id, @workspaceId, @mode, @name, @queryText, @seedCompanies, @directoryConfig, @maxResults, 'queued',
-              @now, @now, @parentMonitorId)`
+              @now, @now, @parentMonitorId, @webhookUrl)`
   ).run({
     id,
     workspaceId: params.workspaceId,
@@ -191,6 +369,7 @@ export function createSearch(params: {
       : null,
     maxResults: params.maxResults,
     parentMonitorId: params.parentMonitorId ?? null,
+    webhookUrl: params.webhookUrl ?? null,
     now,
   });
   return getSearch(id)!;
@@ -259,14 +438,45 @@ export function listDomainsByMonitor(monitorId: string, limit = 500): string[] {
     .all(monitorId, limit) as { url: string }[];
   const hosts = new Set<string>();
   for (const r of rows) {
-    try {
-      const host = new URL(r.url).hostname.replace(/^www\./, "").toLowerCase();
-      if (host) hosts.add(host);
-    } catch {
-      // ignore malformed URLs
-    }
+    const host = normalizeDomain(r.url);
+    if (host) hosts.add(host);
   }
   return Array.from(hosts);
+}
+
+export type LeadIdentity = {
+  domain?: string;
+  phone?: string;
+  identityKey?: string;
+};
+
+// Returns every distinct lead identity already discovered by this monitor's
+// past runs. Used by signal-runner to build a comprehensive `excludeDomains`
+// + `excludePhones` list for the agent prompt.
+export function listIdentitiesByMonitor(
+  monitorId: string,
+  limit = 500
+): LeadIdentity[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT dl.website_url AS url, dl.phone AS phone, dl.identity_key AS identity_key
+         FROM discovered_leads dl
+         JOIN discovery_searches ds ON ds.id = dl.search_id
+         WHERE ds.parent_monitor_id = ?
+         ORDER BY dl.created_at DESC
+         LIMIT ?`
+    )
+    .all(monitorId, limit) as {
+    url: string | null;
+    phone: string | null;
+    identity_key: string | null;
+  }[];
+  return rows.map((r) => ({
+    domain: r.url ? normalizeDomain(r.url) : undefined,
+    phone: r.phone ? normalizePhone(r.phone) : undefined,
+    identityKey: r.identity_key ?? undefined,
+  }));
 }
 
 const SEARCH_FIELD_TO_COLUMN: Record<string, string> = {
@@ -277,6 +487,7 @@ const SEARCH_FIELD_TO_COLUMN: Record<string, string> = {
   costUsd: "cost_usd",
   agentNote: "agent_note",
   error: "error",
+  webhookUrl: "webhook_url",
 };
 
 export function updateSearch(id: string, partial: Partial<DiscoverySearch>): void {
@@ -315,7 +526,7 @@ export function appendDiscoveryLog(searchId: string, line: string): void {
   updateSearch(searchId, { discoveryLog: log });
 }
 
-export function insertLead(params: {
+export type InsertLeadInput = {
   searchId: string;
   companyName: string;
   websiteUrl?: string;
@@ -327,19 +538,124 @@ export function insertLead(params: {
   matchReason?: string;
   sourceUrl?: string;
   score?: number;
-}): DiscoveredLead {
+  phone?: string;
+  streetAddress?: string;
+  city?: string;
+  region?: string;
+  postalCode?: string;
+  countryCode?: string;
+  lat?: number;
+  lng?: number;
+  placeId?: string;
+  hours?: string;
+  naicsCode?: string;
+  licenseNumber?: string;
+};
+
+export type InsertLeadResult = {
+  lead: DiscoveredLead;
+  isNew: boolean;
+};
+
+// Upsert a lead by canonical identity. Identity dedup operates within the
+// scope of a single search — two runs of the same monitor still see distinct
+// rows so each run records what *it* found, but inside one search we fold
+// duplicates so a Yelp scrape that lists "Joe's Plumbing" twice doesn't
+// produce two leads. Cross-run dedup happens at the agent prompt level via
+// listIdentitiesByMonitor.
+export function insertLead(params: InsertLeadInput): InsertLeadResult {
   const db = getDb();
+  const identityKey = canonicalLeadKey({
+    companyName: params.companyName,
+    websiteUrl: params.websiteUrl,
+    phone: params.phone,
+    streetAddress: params.streetAddress,
+    postalCode: params.postalCode,
+  });
+  const phoneNorm = normalizePhone(params.phone);
+
+  // Look for an existing lead in this search with the same identity. If
+  // found, prefer to merge (fill nullable fields from the new payload) over
+  // creating a duplicate row.
+  const existing = db
+    .prepare(
+      `SELECT * FROM discovered_leads WHERE search_id = ? AND identity_key = ? LIMIT 1`
+    )
+    .get(params.searchId, identityKey) as LeadRow | undefined;
+
+  if (existing) {
+    const merged = mergeLeadFields(existing, params);
+    db.prepare(
+      `UPDATE discovered_leads SET
+         website_url    = @websiteUrl,
+         linkedin_url   = @linkedinUrl,
+         description    = @description,
+         location       = @location,
+         industry       = @industry,
+         employee_range = @employeeRange,
+         match_reason   = @matchReason,
+         source_url     = @sourceUrl,
+         score          = @score,
+         phone          = @phone,
+         street_address = @streetAddress,
+         city           = @city,
+         region         = @region,
+         postal_code    = @postalCode,
+         country_code   = @countryCode,
+         lat            = @lat,
+         lng            = @lng,
+         place_id       = @placeId,
+         hours          = @hours,
+         naics_code     = @naicsCode,
+         license_number = @licenseNumber
+       WHERE id = @id`
+    ).run({
+      id: existing.id,
+      websiteUrl: merged.websiteUrl ?? null,
+      linkedinUrl: merged.linkedinUrl ?? null,
+      description: merged.description ?? null,
+      location: merged.location ?? null,
+      industry: merged.industry ?? null,
+      employeeRange: merged.employeeRange ?? null,
+      matchReason: merged.matchReason ?? null,
+      sourceUrl: merged.sourceUrl ?? null,
+      score: merged.score ?? null,
+      phone: merged.phone ?? null,
+      streetAddress: merged.streetAddress ?? null,
+      city: merged.city ?? null,
+      region: merged.region ?? null,
+      postalCode: merged.postalCode ?? null,
+      countryCode: merged.countryCode ?? null,
+      lat: merged.lat ?? null,
+      lng: merged.lng ?? null,
+      placeId: merged.placeId ?? null,
+      hours: merged.hours ?? null,
+      naicsCode: merged.naicsCode ?? null,
+      licenseNumber: merged.licenseNumber ?? null,
+    });
+    const row = db
+      .prepare(`SELECT * FROM discovered_leads WHERE id = ?`)
+      .get(existing.id) as LeadRow;
+    return { lead: leadFromRow(row), isNew: false };
+  }
+
   const id = uuidv4();
   const now = Date.now();
   db.prepare(
     `INSERT INTO discovered_leads (
       id, search_id, company_name, website_url, linkedin_url,
       description, location, industry, employee_range,
-      match_reason, source_url, score, created_at
+      match_reason, source_url, score, created_at,
+      phone, street_address, city, region, postal_code, country_code,
+      lat, lng, place_id, hours, naics_code, license_number,
+      first_seen_at, identity_key
     ) VALUES (
       @id, @searchId, @companyName, @websiteUrl, @linkedinUrl,
       @description, @location, @industry, @employeeRange,
-      @matchReason, @sourceUrl, @score, @now
+      @matchReason, @sourceUrl, @score, @now,
+      @phone, @streetAddress, @city, @region, @postalCode, @countryCode,
+      @lat, @lng, @placeId, @hours, @naicsCode, @licenseNumber,
+      @now, @identityKey
     )`
   ).run({
     id,
@@ -354,12 +670,57 @@ export function insertLead(params: {
     matchReason: params.matchReason ?? null,
     sourceUrl: params.sourceUrl ?? null,
     score: params.score ?? null,
+    phone: phoneNorm ?? params.phone ?? null,
+    streetAddress: params.streetAddress ?? null,
+    city: params.city ?? null,
+    region: params.region ?? null,
+    postalCode: params.postalCode ?? null,
+    countryCode: params.countryCode ?? null,
+    lat: params.lat ?? null,
+    lng: params.lng ?? null,
+    placeId: params.placeId ?? null,
+    hours: params.hours ?? null,
+    naicsCode: params.naicsCode ?? null,
+    licenseNumber: params.licenseNumber ?? null,
+    identityKey,
     now,
   });
   const row = db
     .prepare(`SELECT * FROM discovered_leads WHERE id = ?`)
     .get(id) as LeadRow;
-  return leadFromRow(row);
+  return { lead: leadFromRow(row), isNew: true };
+}
+
+function mergeLeadFields(existing: LeadRow, incoming: InsertLeadInput) {
+  const phoneNorm = normalizePhone(incoming.phone);
+  const pick = <T,>(a: T | null | undefined, b: T | undefined): T | undefined =>
+    a !== null && a !== undefined ? a : b;
+  return {
+    websiteUrl: pick(existing.website_url, incoming.websiteUrl),
+    linkedinUrl: pick(existing.linkedin_url, incoming.linkedinUrl),
+    description: pick(existing.description, incoming.description),
+    location: pick(existing.location, incoming.location),
+    industry: pick(existing.industry, incoming.industry),
+    employeeRange: pick(existing.employee_range, incoming.employeeRange),
+    matchReason: pick(existing.match_reason, incoming.matchReason),
+    sourceUrl: pick(existing.source_url, incoming.sourceUrl),
+    score:
+      existing.score !== null && existing.score !== undefined
+        ? Math.max(existing.score, incoming.score ?? 0)
+        : incoming.score,
+    phone: pick(existing.phone, phoneNorm ?? incoming.phone),
+    streetAddress: pick(existing.street_address, incoming.streetAddress),
+    city: pick(existing.city, incoming.city),
+    region: pick(existing.region, incoming.region),
+    postalCode: pick(existing.postal_code, incoming.postalCode),
+    countryCode: pick(existing.country_code, incoming.countryCode),
+    lat: pick(existing.lat, incoming.lat),
+    lng: pick(existing.lng, incoming.lng),
+    placeId: pick(existing.place_id, incoming.placeId),
+    hours: pick(existing.hours, incoming.hours),
+    naicsCode: pick(existing.naics_code, incoming.naicsCode),
+    licenseNumber: pick(existing.license_number, incoming.licenseNumber),
+  };
 }
 
 export function listLeadsBySearch(searchId: string): DiscoveredLead[] {

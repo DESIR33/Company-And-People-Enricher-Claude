@@ -2,7 +2,7 @@ import type { SignalAgentConfig } from "./discovery-agent";
 import {
   createSearch,
   getSearch,
-  listDomainsByMonitor,
+  listIdentitiesByMonitor,
   type DiscoveryMode,
 } from "./discovery-store";
 import { executeSearch } from "./discovery-runner";
@@ -22,6 +22,8 @@ const MODE_BY_SIGNAL: Record<SignalType, DiscoveryMode> = {
   hiring: "signal_hiring",
   news: "signal_news",
   reviews: "signal_reviews",
+  new_business: "signal_new_business",
+  license: "signal_license",
 };
 
 export type StartSignalRunResult =
@@ -31,7 +33,8 @@ export type StartSignalRunResult =
 
 function buildAgentConfig(
   monitor: SignalMonitor,
-  excludeDomains: string[]
+  excludeDomains: string[],
+  excludePhones: string[]
 ): SignalAgentConfig {
   const c: SignalConfig = monitor.config;
   return {
@@ -48,7 +51,11 @@ function buildAgentConfig(
     reviewPlatform: c.reviewPlatform,
     reviewSentiment: c.reviewSentiment,
     minReviewCount: c.minReviewCount,
+    states: c.states,
+    naicsCodes: c.naicsCodes,
+    licenseTypes: c.licenseTypes,
     excludeDomains,
+    excludePhones,
   };
 }
 
@@ -82,6 +89,16 @@ function buildQueryText(monitor: SignalMonitor): string {
     if (config.minReviewCount !== undefined)
       bits.push(`Min fresh reviews: ${config.minReviewCount}`);
   }
+  if (signalType === "new_business") {
+    if (config.states?.length) bits.push(`States: ${config.states.join(", ")}`);
+    if (config.naicsCodes?.length)
+      bits.push(`NAICS: ${config.naicsCodes.join(", ")}`);
+  }
+  if (signalType === "license") {
+    if (config.states?.length) bits.push(`States: ${config.states.join(", ")}`);
+    if (config.licenseTypes?.length)
+      bits.push(`License types: ${config.licenseTypes.join(", ")}`);
+  }
   if (config.icpHint) bits.push(`ICP hint: ${config.icpHint}`);
   return bits.join(" · ");
 }
@@ -90,10 +107,17 @@ async function runSignalSearch(
   monitor: SignalMonitor,
   searchId: string
 ): Promise<void> {
-  const agentConfig = buildAgentConfig(
-    monitor,
-    listDomainsByMonitor(monitor.id, 500)
+  // Pull every distinct identity already discovered by this monitor's prior
+  // runs. The agent gets both the domain blocklist (existing behaviour) and
+  // a phone blocklist (new — covers SMBs without a website).
+  const identities = listIdentitiesByMonitor(monitor.id, 500);
+  const excludeDomains = Array.from(
+    new Set(identities.map((i) => i.domain).filter((d): d is string => !!d))
   );
+  const excludePhones = Array.from(
+    new Set(identities.map((i) => i.phone).filter((p): p is string => !!p))
+  );
+  const agentConfig = buildAgentConfig(monitor, excludeDomains, excludePhones);
 
   try {
     await executeSearch(searchId, { signalConfig: agentConfig });
