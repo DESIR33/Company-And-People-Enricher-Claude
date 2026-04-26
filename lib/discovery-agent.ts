@@ -2,6 +2,7 @@ import { query, SYSTEM_PROMPT_DYNAMIC_BOUNDARY } from "@anthropic-ai/claude-agen
 import { resolveClaudeCodeExecutable } from "./claude-runtime";
 import { extractFirstJsonObject } from "./json-extract";
 import type { DirectoryConfig, DiscoveryMode } from "./discovery-store";
+import { findVerticalByQuery, getVertical } from "./taxonomy/lookup";
 
 export type SignalAgentConfig = {
   signalType: "funding" | "hiring" | "news" | "reviews" | "new_business" | "license";
@@ -315,6 +316,20 @@ Workflow:
 Target: ${params.maxResults} companies with a fresh news signal.`;
 }
 
+// Phase 5 — when the user types a free-text vertical like "plumber" or
+// "hvac contractor" for a NAICS-aware source (state SoS, license board,
+// Manta), resolve it to the canonical NAICS code(s) via the taxonomy
+// and append the hint to the prompt. Falls through to an empty string
+// when nothing matches, so existing behaviour is unchanged.
+function renderNaicsHint(rawCategory?: string): string {
+  if (!rawCategory) return "";
+  const v = getVertical(rawCategory) ?? findVerticalByQuery(rawCategory);
+  if (!v) return "";
+  const codes = v.naics.join(", ");
+  const sic = v.sic[0];
+  return `\nNAICS hint: ${codes} (${v.label}${sic ? `, SIC ${sic}` : ""})`;
+}
+
 function renderGeoBlock(cfg: DirectoryConfig): string {
   // Compose a one-line geo description that surfaces every input the user
   // provided — agents work much better when given lat/lng + radius + zip
@@ -615,9 +630,10 @@ Target: ${params.maxResults} YP-listed businesses.`;
     case "manta": {
       const category = cfg.category ?? cfg.query ?? "(none)";
       const geo = renderGeoBlock(cfg);
+      const naicsHint = renderNaicsHint(cfg.category ?? cfg.query);
       return `Find up to ${params.maxResults} businesses on Manta (manta.com), a US SMB directory with NAICS codes.
 
-Category: ${category}
+Category: ${category}${naicsHint}
 Geo: ${geo}${extra}
 
 Workflow:
@@ -724,10 +740,11 @@ Target: ${params.maxResults} marketplace-active SMBs (great for vendor/SaaS pitc
       const state = cfg.state ?? "(none)";
       const licenseType = cfg.category ?? cfg.query ?? "(any license type)";
       const geo = renderGeoBlock(cfg);
+      const naicsHint = renderNaicsHint(cfg.category ?? cfg.query);
       return `Find up to ${params.maxResults} licensed businesses from a state contractor-license board.
 
 State: ${state}
-License type: ${licenseType}
+License type: ${licenseType}${naicsHint}
 Geo: ${geo}${extra}
 
 Workflow:
@@ -743,23 +760,187 @@ Target: ${params.maxResults} actively-licensed businesses.`;
 
     case "state_sos": {
       const state = cfg.state ?? "(none)";
-      const naics = cfg.category ?? cfg.query ?? "(any industry)";
+      const industry = cfg.category ?? cfg.query ?? "(any industry)";
       const geo = renderGeoBlock(cfg);
+      const naicsHint = renderNaicsHint(cfg.category ?? cfg.query);
       return `Find up to ${params.maxResults} businesses recently registered with a state Secretary of State.
 
 State: ${state}
-NAICS / industry: ${naics}
+Industry: ${industry}${naicsHint}
 Geo: ${geo}${extra}
 
 Workflow:
 1. Use the state-specific filings search. Common ones: CA BizFile Online (https://bizfileonline.sos.ca.gov), TX Comptroller (https://mycpa.cpa.state.tx.us/coa/), FL Sunbiz (https://search.sunbiz.org), NY DOS Entity Search, GA eCorp (https://ecorp.sos.ga.gov/BusinessSearch).
 2. SoS filings include entity name, formation date, registered agent, principal address, entity type (LLC/Inc/PLLC), status.
-3. Filter to entities formed within the timeframe and matching the NAICS / industry where data is exposed.
+3. Filter to entities formed within the timeframe and matching the NAICS / industry where data is exposed. When a NAICS code is provided in the hint above, prefer searches that accept it directly.
 4. For each: companyName, streetAddress (principal address), city, region, postalCode, naicsCode (if listed), placeId (filing #), score 70+ (newly formed = high intent).
 5. matchReason MUST include formation date and entity type — e.g. "LLC formed 2026-04-02 in Travis County, TX".
 6. Skip dissolved or inactive filings.
 
 Target: ${params.maxResults} newly registered businesses.`;
+    }
+
+    case "google_places": {
+      // Normally served by the runner via the Google Places API (New).
+      // Agent fallback runs only if GOOGLE_PLACES_API_KEY is missing or the
+      // direct call failed.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on Google Maps matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Search Google Maps for the category in the geo. Extract business name, website, phone, full address, lat/lng, hours, rating, review count.
+2. For each: companyName, websiteUrl, phone, streetAddress, city, region, postalCode, lat, lng, hours.
+3. matchReason MUST cite Google Maps and rating (e.g. "Google Maps · 4.7★ (412 reviews)").
+4. Skip permanently closed listings.
+
+Target: ${params.maxResults} Google Maps-listed businesses.`;
+    }
+
+    case "foursquare": {
+      // Normally served by the runner via the Foursquare Places API. Agent
+      // fallback runs only if FOURSQUARE_API_KEY is missing or the direct
+      // call failed.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on Foursquare matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Search Foursquare (https://foursquare.com) or its city pages for the category in the geo.
+2. For each: companyName, websiteUrl, phone, streetAddress, city, region, postalCode, lat, lng.
+3. matchReason MUST cite Foursquare and the venue category.
+4. Skip closed venues.
+
+Target: ${params.maxResults} Foursquare-listed businesses.`;
+    }
+
+    case "bing_places": {
+      // Normally served by the runner via Bing Local Search. Agent fallback
+      // runs only if BING_MAPS_API_KEY is missing or the direct call failed.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on Bing Maps matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Search Bing Maps (https://www.bing.com/maps) for the category in the geo.
+2. For each: companyName, websiteUrl, phone, streetAddress, city, region, postalCode, lat, lng.
+3. matchReason MUST cite Bing Maps and the listing's category.
+4. Skip closed listings.
+
+Target: ${params.maxResults} Bing Maps-listed businesses.`;
+    }
+
+    case "tomtom": {
+      // Normally served by the runner via TomTom Search API. Agent
+      // fallback runs only if TOMTOM_API_KEY is missing or the direct
+      // call failed.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on TomTom maps matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Search TomTom (https://www.tomtom.com/maps/) for the category in the geo.
+2. For each: companyName, websiteUrl, phone, streetAddress, city, region, postalCode, lat, lng.
+3. matchReason MUST cite TomTom and the listing's category.
+4. Skip closed listings.
+
+Target: ${params.maxResults} TomTom-listed businesses.`;
+    }
+
+    case "here_places": {
+      // Normally served by the runner via HERE Discover/Browse APIs.
+      // Agent fallback runs only if HERE_API_KEY is missing or the
+      // direct call failed.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on HERE / Wego maps matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Search HERE / Wego (https://wego.here.com) for the category in the geo. HERE has strong European coverage.
+2. For each: companyName, websiteUrl, phone, streetAddress, city, region, postalCode, lat, lng, countryCode.
+3. matchReason MUST cite HERE / Wego and the listing's category.
+4. Skip closed listings.
+
+Target: ${params.maxResults} HERE-listed businesses.`;
+    }
+
+    case "bbb_direct": {
+      // Normally served by the runner via Playwright + the BBB listing
+      // page parser. Agent fallback runs when Playwright isn't installed
+      // (e.g. Vercel) or the scraper failed. Mirrors the existing `bbb`
+      // case workflow.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = cfg.geo ?? "(none)";
+      return `Pull up to ${params.maxResults} BBB-listed local businesses (Playwright unavailable — use web search).
+
+Category: ${category}
+Geography: ${geo}${extra}
+
+Workflow:
+1. Start at https://www.bbb.org/search?find_country=USA&find_text=${encodeURIComponent(category)}&find_loc=${encodeURIComponent(geo)}.
+2. Prefer accredited (A+ / A) listings.
+3. Capture name, website (from the BBB profile, NOT the BBB URL), phone, address, years in business, BBB letter rating, accreditation status.
+4. matchReason MUST cite BBB rating + years in business + accreditation when present.
+5. If BBB blocks the fetch, fall back to "site:bbb.org/us/<state> <category> <city>" web search.
+
+Target: ${params.maxResults} BBB-listed local businesses.`;
+    }
+
+    case "yelp_direct": {
+      // Normally served by the runner via Playwright + the Yelp listing
+      // page parser. Agent fallback runs when Playwright isn't installed
+      // on the host (e.g. Vercel serverless deploys) or the scraper
+      // failed. Imitates the same query through web search.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on Yelp matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Use Yelp's site: search — site:yelp.com/biz <category> <geo>.
+2. For each result, capture name, websiteUrl (the external link from the Yelp profile, NOT the Yelp URL), phone, streetAddress, city, region, postalCode, rating, review count.
+3. matchReason MUST cite Yelp + rating + review count.
+4. Skip closed businesses ("Yelp users report this business is closed").
+
+Target: ${params.maxResults} Yelp-listed businesses.`;
+    }
+
+    case "apify": {
+      // Normally served by the runner via the Apify API. This agent
+      // fallback only runs if APIFY_API_TOKEN is missing or the actor
+      // failed — we describe what the actor would have searched for so
+      // the agent can imitate it via the open web.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      const actor = cfg.actorId ?? "(unspecified)";
+      return `An Apify actor (${actor}) was requested but is unavailable. Approximate the same query through the open web.
+
+Search target: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Identify what the actor was meant to scrape from its name (e.g. "linkedin-companies" → LinkedIn company pages, "yelp-scraper" → Yelp listings, "crunchbase-scraper" → Crunchbase profiles).
+2. Run a web search constrained to that platform: site:linkedin.com/company, site:yelp.com/biz, site:crunchbase.com/organization, etc.
+3. For each: companyName, websiteUrl, phone, location, and a matchReason that cites the source page.
+
+Target: ${params.maxResults} companies imitating the requested actor.`;
     }
   }
 }

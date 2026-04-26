@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
-import { Gauge, Building2, Users, UserSearch, Radar, Target, Flame, Search, Zap } from "lucide-react";
+import { Gauge, Building2, Users, UserSearch, Radar, Target, Flame, Search, Zap, Layers } from "lucide-react";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
 const LINKS = [
   { href: "/discover",              label: "Discover",       icon: Search },
   { href: "/signals",               label: "Signals",        icon: Zap },
+  { href: "/canonical-companies",   label: "Companies",      icon: Layers },
   { href: "/enrich/company",        label: "Company",        icon: Building2 },
   { href: "/enrich/people",         label: "People",         icon: Users },
   { href: "/enrich/decision_maker", label: "Decision Maker", icon: UserSearch },

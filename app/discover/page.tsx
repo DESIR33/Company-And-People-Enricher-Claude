@@ -75,7 +75,15 @@ type DirectorySource =
   | "tripadvisor"
   | "delivery_marketplace"
   | "state_license_board"
-  | "state_sos";
+  | "state_sos"
+  | "google_places"
+  | "foursquare"
+  | "bing_places"
+  | "tomtom"
+  | "here_places"
+  | "apify"
+  | "yelp_direct"
+  | "bbb_direct";
 
 type DirectoryConfig = {
   source: DirectorySource;
@@ -91,6 +99,7 @@ type DirectoryConfig = {
   zips?: string[];
   msaCode?: string;
   state?: string;
+  actorId?: string;
 };
 type DiscoveryStatus =
   | "queued"
@@ -178,6 +187,14 @@ const LOCAL_DIRECTORY_SOURCES: DirectorySource[] = [
   "angi",
   "facebook_pages",
   "google_maps",
+  "google_places",
+  "foursquare",
+  "bing_places",
+  "tomtom",
+  "here_places",
+  "apify",
+  "yelp_direct",
+  "bbb_direct",
 ];
 
 function defaultEnrichFieldsForSearch(search: DiscoverySearch | null): string[] {
@@ -373,9 +390,57 @@ const DIRECTORY_META: Record<
   { label: string; icon: typeof BookOpen; hint: string; smbFriendly: boolean }
 > = {
   google_maps: {
-    label: "Google Maps",
+    label: "Google Maps (agent)",
     icon: MapPin,
-    hint: "Local businesses by category + geography. Best default for field-services.",
+    hint: "Agent-driven Google Maps search. Use Google Places (API) below for the deterministic, lower-cost native version.",
+    smbFriendly: true,
+  },
+  google_places: {
+    label: "Google Places (API)",
+    icon: MapPin,
+    hint: "Native Google Places API (New) — deterministic JSON, no LLM tokens. Tile fan-out covers dense metros despite the 20-result Nearby cap. Requires GOOGLE_PLACES_API_KEY.",
+    smbFriendly: true,
+  },
+  foursquare: {
+    label: "Foursquare (API)",
+    icon: Compass,
+    hint: "Native Foursquare Places API. Strongest international coverage; complements Google in ex-US metros. Requires FOURSQUARE_API_KEY.",
+    smbFriendly: true,
+  },
+  bing_places: {
+    label: "Bing Local Search (API)",
+    icon: Search,
+    hint: "Native Bing Maps Local Search API. Useful as a Google fallback in regions where Google quotas/coverage thin out. Requires BING_MAPS_API_KEY.",
+    smbFriendly: true,
+  },
+  tomtom: {
+    label: "TomTom (API)",
+    icon: Map,
+    hint: "Native TomTom Search API. Strongest international POI dataset of the major commercial mappers, generous free tier. Best for ex-US sweeps. Requires TOMTOM_API_KEY.",
+    smbFriendly: true,
+  },
+  here_places: {
+    label: "HERE (API)",
+    icon: Map,
+    hint: "Native HERE Discover/Browse API. Best-in-class European POI coverage and vehicle-routing-grade addresses. Requires HERE_API_KEY.",
+    smbFriendly: true,
+  },
+  apify: {
+    label: "Apify (LinkedIn / Glassdoor / Crunchbase / etc.)",
+    icon: Sparkles,
+    hint: "Run battle-tested Apify actors for sites that block direct fetches: LinkedIn, Glassdoor, Crunchbase, Yelp, Google Maps, Instagram. Apify handles proxies, browsers, and CAPTCHAs. Requires APIFY_API_TOKEN; pay per actor run.",
+    smbFriendly: true,
+  },
+  yelp_direct: {
+    label: "Yelp (self-hosted Playwright)",
+    icon: Star,
+    hint: "Self-hosted Yelp scraper. Lowest cost-per-lead at scale once the infra is up. Requires `npm install playwright && npx playwright install chromium` on the host (will not run on Vercel). Configure proxies via PLAYWRIGHT_PROXY_URL_POOL.",
+    smbFriendly: true,
+  },
+  bbb_direct: {
+    label: "BBB (self-hosted Playwright)",
+    icon: ShieldCheck,
+    hint: "Self-hosted BBB scraper. Captures BBB letter rating (A+ … F), accreditation status, and years in business — high-signal vetting on top of NAP. Same Playwright requirements as yelp_direct.",
     smbFriendly: true,
   },
   yelp: {
@@ -507,6 +572,14 @@ const DIRECTORY_META: Record<
 };
 
 const DIRECTORY_SOURCE_ORDER: DirectorySource[] = [
+  "google_places",
+  "foursquare",
+  "tomtom",
+  "here_places",
+  "bing_places",
+  "apify",
+  "yelp_direct",
+  "bbb_direct",
   "google_maps",
   "osm_overpass",
   "yelp",
@@ -561,6 +634,8 @@ function CreateSearchForm({
   const [dirRadius, setDirRadius] = useState("");
   const [dirZips, setDirZips] = useState("");
   const [dirState, setDirState] = useState("");
+  // Phase 2.1 — Apify actor ID (preset key or custom user/actor).
+  const [dirActorId, setDirActorId] = useState("");
   // Phase 1.4 — discovery webhook URL.
   const [webhookUrl, setWebhookUrl] = useState("");
 
@@ -628,6 +703,7 @@ function CreateSearchForm({
       if (dirBatch.trim()) directoryConfig.batch = dirBatch.trim();
       if (dirState.trim())
         directoryConfig.state = dirState.trim().toUpperCase().slice(0, 2);
+      if (dirActorId.trim()) directoryConfig.actorId = dirActorId.trim();
       const latNum = parseFloat(dirLat);
       const lngNum = parseFloat(dirLng);
       const radNum = parseFloat(dirRadius);
@@ -697,6 +773,50 @@ function CreateSearchForm({
         !directoryConfig.query
       ) {
         return setError("Give a business category for this directory.");
+      }
+      if (dirSource === "google_places") {
+        const hasQuery = !!(directoryConfig.category || directoryConfig.query);
+        const hasNearby =
+          directoryConfig.lat !== undefined &&
+          directoryConfig.lng !== undefined &&
+          !!directoryConfig.category;
+        if (!hasQuery && !hasNearby) {
+          return setError(
+            "Google Places needs a category or free-text query (and a geo bias for Nearby Search)."
+          );
+        }
+      }
+      if (
+        dirSource === "foursquare" ||
+        dirSource === "bing_places" ||
+        dirSource === "tomtom" ||
+        dirSource === "here_places"
+      ) {
+        const hasFilter = !!(directoryConfig.category || directoryConfig.query);
+        const hasGeo =
+          (directoryConfig.lat !== undefined && directoryConfig.lng !== undefined) ||
+          !!directoryConfig.geo ||
+          !!directoryConfig.zips?.length;
+        if (!hasFilter) {
+          return setError("Give a business category or query for this directory.");
+        }
+        if (!hasGeo) {
+          return setError(
+            "Give a geo (lat/lng + radius, zip, or city) so the search has something to scope to."
+          );
+        }
+      }
+      if (dirSource === "apify") {
+        if (!directoryConfig.actorId) {
+          return setError(
+            "Pick an Apify actor preset, or paste a custom \"username/actor\" ID."
+          );
+        }
+        if (!directoryConfig.category && !directoryConfig.query) {
+          return setError(
+            "Give a search query (or category) so the actor knows what to look for."
+          );
+        }
       }
 
       body = {
@@ -996,11 +1116,22 @@ function CreateSearchForm({
               dirSource === "nextdoor" ||
               dirSource === "opentable" ||
               dirSource === "tripadvisor" ||
-              dirSource === "delivery_marketplace") && (
+              dirSource === "delivery_marketplace" ||
+              dirSource === "google_places" ||
+              dirSource === "foursquare" ||
+              dirSource === "bing_places" ||
+              dirSource === "tomtom" ||
+              dirSource === "here_places" ||
+              dirSource === "yelp_direct" ||
+              dirSource === "bbb_direct") && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
-                    {dirSource === "osm_overpass"
+                    {dirSource === "osm_overpass" ||
+                    dirSource === "google_places" ||
+                    dirSource === "foursquare" ||
+                    dirSource === "tomtom" ||
+                    dirSource === "here_places"
                       ? "Category (preset key or free text)"
                       : "Business category"}
                   </label>
@@ -1014,7 +1145,11 @@ function CreateSearchForm({
                           dirSource === "tripadvisor" ||
                           dirSource === "delivery_marketplace"
                         ? "italian, sushi, pizza, brunch"
-                        : dirSource === "osm_overpass"
+                        : dirSource === "osm_overpass" ||
+                          dirSource === "google_places" ||
+                          dirSource === "foursquare" ||
+                          dirSource === "tomtom" ||
+                          dirSource === "here_places"
                         ? "restaurant, plumber, roofer, hair, dentist"
                         : "HVAC contractor, dentist, gym"
                     }
@@ -1120,6 +1255,65 @@ function CreateSearchForm({
               </div>
             )}
 
+            {dirSource === "apify" && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Actor
+                  </label>
+                  <select
+                    value={dirActorId}
+                    onChange={(e) => setDirActorId(e.target.value)}
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition bg-white"
+                  >
+                    <option value="">Pick an actor…</option>
+                    <option value="linkedin_companies">LinkedIn Companies</option>
+                    <option value="glassdoor_companies">Glassdoor Companies</option>
+                    <option value="crunchbase_companies">Crunchbase Companies</option>
+                    <option value="yelp_businesses">Yelp Businesses</option>
+                    <option value="google_maps_businesses">Google Maps (via Apify)</option>
+                    <option value="instagram_business_search">Instagram Business Search</option>
+                  </select>
+                  <p className="text-[11px] text-cloudy mt-1">
+                    Or type a custom <code>username/actor</code> ID below to use an unlisted actor.
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Custom actor (overrides preset)
+                  </label>
+                  <input
+                    value={dirActorId.includes("/") || dirActorId.includes("~") ? dirActorId : ""}
+                    onChange={(e) => setDirActorId(e.target.value)}
+                    placeholder="apify/web-scraper"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition font-mono text-[12px]"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Search query
+                  </label>
+                  <input
+                    value={dirQuery}
+                    onChange={(e) => setDirQuery(e.target.value)}
+                    placeholder="HVAC contractor — passed to the actor as keywords/query/searchTerms"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Location <span className="text-cloudy font-normal">(optional, location-aware actors only)</span>
+                  </label>
+                  <input
+                    value={dirGeo}
+                    onChange={(e) => setDirGeo(e.target.value)}
+                    placeholder="Austin, TX"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+              </div>
+            )}
+
             {/* Phase 1.3 — radius/zip/MSA inputs. Power-user precision geo for any
                 local-business directory; agents can still ignore them when not
                 needed. */}
@@ -1136,7 +1330,14 @@ function CreateSearchForm({
               dirSource === "nextdoor" ||
               dirSource === "opentable" ||
               dirSource === "tripadvisor" ||
-              dirSource === "delivery_marketplace") && (
+              dirSource === "delivery_marketplace" ||
+              dirSource === "google_places" ||
+              dirSource === "foursquare" ||
+              dirSource === "bing_places" ||
+              dirSource === "tomtom" ||
+              dirSource === "here_places" ||
+              dirSource === "yelp_direct" ||
+              dirSource === "bbb_direct") && (
               <details className="rounded-lg border border-cloudy/30 bg-pampas/40">
                 <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-gray-700 flex items-center gap-1.5">
                   <Compass className="w-3.5 h-3.5 text-cloudy" strokeWidth={2} />

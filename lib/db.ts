@@ -347,6 +347,54 @@ function initSqlite(db: Database.Database): void {
       ON discovered_leads(search_id, identity_key);
     CREATE INDEX IF NOT EXISTS idx_discovery_searches_parent
       ON discovery_searches(parent_monitor_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS canonical_companies (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      identity_key TEXT NOT NULL,
+      company_name TEXT NOT NULL,
+      website_url TEXT,
+      domain TEXT,
+      phone TEXT,
+      street_address TEXT,
+      city TEXT,
+      region TEXT,
+      postal_code TEXT,
+      country_code TEXT,
+      lat REAL,
+      lng REAL,
+      geohash TEXT,
+      industry TEXT,
+      categories TEXT,
+      hours TEXT,
+      google_rating REAL,
+      google_review_count INTEGER,
+      yelp_rating REAL,
+      yelp_review_count INTEGER,
+      bbb_rating TEXT,
+      bbb_accredited INTEGER,
+      years_in_business INTEGER,
+      naics_code TEXT,
+      license_number TEXT,
+      seen_in_sources TEXT NOT NULL DEFAULT '[]',
+      source_count INTEGER NOT NULL DEFAULT 1,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      tech_stack TEXT,
+      domain_created_at INTEGER,
+      domain_registrar TEXT,
+      first_cert_at INTEGER,
+      signals_updated_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_canonical_companies_workspace
+      ON canonical_companies(workspace_id, last_seen_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_canonical_companies_workspace_phone
+      ON canonical_companies(workspace_id, phone);
+    CREATE INDEX IF NOT EXISTS idx_canonical_companies_workspace_domain
+      ON canonical_companies(workspace_id, domain);
+    CREATE INDEX IF NOT EXISTS idx_canonical_companies_workspace_geohash
+      ON canonical_companies(workspace_id, geohash);
     CREATE TABLE IF NOT EXISTS scrape_cache (
       cache_key TEXT PRIMARY KEY,
       url TEXT NOT NULL,
@@ -415,6 +463,8 @@ function initSqlite(db: Database.Database): void {
     ["license_number", "TEXT"],
     ["first_seen_at", "INTEGER"],
     ["identity_key", "TEXT"],
+    // Phase 3 — link each lead to its cross-source canonical company.
+    ["canonical_company_id", "TEXT"],
   ];
   for (const [name, type] of NEW_LEAD_COLUMNS) {
     if (!leadColumns.has(name)) {
@@ -442,6 +492,31 @@ function initSqlite(db: Database.Database): void {
   }
   if (!jobColumns.has("suppression_list")) {
     db.exec(`ALTER TABLE jobs ADD COLUMN suppression_list TEXT`);
+  }
+
+  // --- Phase 4 — signal-enrichment columns on canonical_companies ---
+  // Tech stack, domain freshness (RDAP), and CT-log first-cert date.
+  // These migrate cleanly on top of pre-Phase-4 canonical rows because
+  // they're all NULLable; new rows inserted by upsertCanonicalCompany
+  // leave them NULL until enrichSignals runs against the row.
+  const canonicalColumns = new Set(
+    (
+      db.prepare(`PRAGMA table_info(canonical_companies)`).all() as {
+        name: string;
+      }[]
+    ).map((c) => c.name)
+  );
+  const NEW_CANONICAL_COLUMNS: Array<[string, string]> = [
+    ["tech_stack", "TEXT"],
+    ["domain_created_at", "INTEGER"],
+    ["domain_registrar", "TEXT"],
+    ["first_cert_at", "INTEGER"],
+    ["signals_updated_at", "INTEGER"],
+  ];
+  for (const [name, type] of NEW_CANONICAL_COLUMNS) {
+    if (!canonicalColumns.has(name)) {
+      db.exec(`ALTER TABLE canonical_companies ADD COLUMN ${name} ${type}`);
+    }
   }
 
   // --- Client workspace scoping (white-label) ---
@@ -732,6 +807,55 @@ function initSupabase(db: QueryDb): void {
     ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS license_number TEXT;
     ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS first_seen_at BIGINT;
     ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS identity_key TEXT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS canonical_company_id TEXT;
+    CREATE TABLE IF NOT EXISTS canonical_companies (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      identity_key TEXT NOT NULL,
+      company_name TEXT NOT NULL,
+      website_url TEXT,
+      domain TEXT,
+      phone TEXT,
+      street_address TEXT,
+      city TEXT,
+      region TEXT,
+      postal_code TEXT,
+      country_code TEXT,
+      lat DOUBLE PRECISION,
+      lng DOUBLE PRECISION,
+      geohash TEXT,
+      industry TEXT,
+      categories TEXT,
+      hours TEXT,
+      google_rating DOUBLE PRECISION,
+      google_review_count INTEGER,
+      yelp_rating DOUBLE PRECISION,
+      yelp_review_count INTEGER,
+      bbb_rating TEXT,
+      bbb_accredited SMALLINT,
+      years_in_business INTEGER,
+      naics_code TEXT,
+      license_number TEXT,
+      seen_in_sources TEXT NOT NULL DEFAULT '[]',
+      source_count INTEGER NOT NULL DEFAULT 1,
+      first_seen_at BIGINT NOT NULL,
+      last_seen_at BIGINT NOT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      tech_stack TEXT,
+      domain_created_at BIGINT,
+      domain_registrar TEXT,
+      first_cert_at BIGINT,
+      signals_updated_at BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS idx_canonical_companies_workspace
+      ON canonical_companies(workspace_id, last_seen_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_canonical_companies_workspace_phone
+      ON canonical_companies(workspace_id, phone);
+    CREATE INDEX IF NOT EXISTS idx_canonical_companies_workspace_domain
+      ON canonical_companies(workspace_id, domain);
+    CREATE INDEX IF NOT EXISTS idx_canonical_companies_workspace_geohash
+      ON canonical_companies(workspace_id, geohash);
     CREATE TABLE IF NOT EXISTS scrape_cache (
       cache_key TEXT PRIMARY KEY,
       url TEXT NOT NULL,

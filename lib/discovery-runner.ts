@@ -19,8 +19,59 @@ import {
   queryOsmArea,
   queryOsmRadius,
 } from "./directories/osm-overpass";
+import {
+  googlePlaceToLeadInput,
+  searchPlacesByText,
+  searchPlacesNearby,
+  type GooglePlace,
+} from "./directories/google-places";
+import {
+  foursquarePlaceToLeadInput,
+  searchFoursquareNear,
+  searchFoursquareRadius,
+  type FoursquarePlace,
+} from "./directories/foursquare";
+import {
+  bingPlaceToLeadInput,
+  searchBingLocal,
+  type BingPlace,
+} from "./directories/bing-places";
+import {
+  searchTomTomRadius,
+  tomtomPlaceToLeadInput,
+  type TomTomPlace,
+} from "./directories/tomtom";
+import {
+  herePlaceToLeadInput,
+  searchHerePlaces,
+  type HerePlace,
+} from "./directories/here-places";
+import {
+  genericItemToLead,
+  getApifyPreset,
+  type ApifyLeadInput,
+} from "./directories/apify-actors";
+import { runActorAndGetItems } from "./scrapers/apify";
+import {
+  searchYelpDirect,
+  yelpDirectToLeadInput,
+} from "./directories/yelp-direct";
+import {
+  bbbDirectToLeadInput,
+  searchBbbDirect,
+} from "./directories/bbb-direct";
+// Side-effect import: registers the canonical-company linkage hook so every
+// lead inserted by this runner gets resolved into a cross-source canonical
+// record. Must be imported before any search executes.
+import "./canonical-companies";
+// Side-effect import: registers the auto-enrich upsert hook so canonical
+// companies with a domain get tech-stack/RDAP/CT-log signals fetched in the
+// background without a user click. Bounded queue + TTL guard live in the
+// module; this import is just the wiring.
+import "./signals/enrich-canonical";
 import { getStateRegistry } from "./directories/state-registries";
 import { expandZipsForRadius, lookupZip, parseGeoString } from "./geo";
+import { dedupeById, suggestedTileMiles, tilesForRadius } from "./geo-fan";
 
 export type StartSearchResult =
   | { status: "started"; searchId: string }
@@ -75,6 +126,285 @@ export async function executeSearch(
       appendDiscoveryLog(
         searchId,
         `Search ${status}: ${osmCount} OSM businesses, $0.00 (free API)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: Google Places (New) -------------------------
+    // Same idea as OSM but uses Google's structured JSON. We fan a single
+    // radius query out into a tile grid because Nearby Search caps at 20
+    // results per call — without tiling, dense metros get truncated.
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "google_places"
+    ) {
+      const count = await runGooglePlacesDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `Google Places returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} Google Places businesses (Google quota only)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: Yelp via Playwright -------------------------
+    // Self-hosted scraper. Requires `npm install playwright` + a browser
+    // download on the host. Falls through to the agent-driven `yelp` source
+    // if the install isn't present (the runner reports it via log).
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "yelp_direct"
+    ) {
+      const count = await runYelpDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `Yelp (Playwright) returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} Yelp businesses (Playwright direct)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: BBB via Playwright --------------------------
+    // Self-hosted scraper. BBB is a high-signal SMB directory: every
+    // listing is verified, accredited businesses score higher, A-F
+    // letter rating + years in business surface in matchReason.
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "bbb_direct"
+    ) {
+      const count = await runBbbDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `BBB (Playwright) returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} BBB businesses (Playwright direct)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: Apify (LinkedIn / Glassdoor / Yelp / etc.) ---
+    // Apify wraps the directories that block direct fetches. The runner
+    // selects an actor via cfg.actorId (preset key or raw `user/actor`),
+    // builds the actor input from the directoryConfig, runs it, and maps
+    // returned dataset items to leads.
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "apify"
+    ) {
+      const result = await runApifyDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = result.count;
+      totalCost += result.costUsd;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `Apify actor returned ${result.count} business(es).`,
+      });
+      if (totalCost > 0) recordUsage(0, totalCost);
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${result.count} Apify items, $${totalCost.toFixed(4)}`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: TomTom Search -------------------------------
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "tomtom"
+    ) {
+      const count = await runTomTomDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `TomTom Search returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} TomTom businesses (TomTom quota only)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: HERE Discover -------------------------------
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "here_places"
+    ) {
+      const count = await runHereDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `HERE returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} HERE businesses (HERE quota only)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: Bing Local Search ---------------------------
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "bing_places"
+    ) {
+      const count = await runBingPlacesDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `Bing Local Search returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} Bing businesses (Bing quota only)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: Foursquare Places ---------------------------
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "foursquare"
+    ) {
+      const count = await runFoursquareDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `Foursquare returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} Foursquare businesses (Foursquare quota only)`
       );
       await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
         appendDiscoveryLog(searchId, line)
@@ -263,6 +593,665 @@ async function runOsmOverpassDirect(
     }
   }
   log(`OSM Overpass: inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- Google Places direct path --------------------------------------------
+// Uses the new Places API. Two modes:
+//   - Nearby: lat/lng + radius + category preset → fans out across a tile
+//     grid because Nearby Search hard-caps at 20 results per call.
+//   - Text:   free-text query, optionally biased to a circle. Returns up
+//     to 60 results across paginated pages.
+//
+// Picks Nearby when both a category preset and a center point are present;
+// otherwise falls back to Text Search. Tile fan-out caps at 25 tiles to
+// keep quota use predictable.
+async function runGooglePlacesDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const category = cfg.category ?? cfg.query;
+  const queryText = cfg.query ?? cfg.category;
+
+  const { lat, lng, geoLabel } = resolveLatLng(cfg);
+
+  const radiusMiles = cfg.radiusMiles ?? 10;
+  let results: GooglePlace[] = [];
+
+  try {
+    if (lat !== undefined && lng !== undefined && category) {
+      const tileMiles = suggestedTileMiles("google_places", "med");
+      const tiles = tilesForRadius(lat, lng, radiusMiles, tileMiles, { maxTiles: 25 });
+      log(
+        `Google Places: ${tiles.length} tile(s) of ~${tileMiles}mi covering ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+      );
+      const collected: GooglePlace[] = [];
+      for (const tile of tiles) {
+        if (signal.aborted) break;
+        if (collected.length >= maxResults) break;
+        try {
+          const batch = await searchPlacesNearby({
+            lat: tile.lat,
+            lng: tile.lng,
+            radiusMiles: tile.radiusMiles,
+            category,
+            maxResults: 20,
+            signal,
+          });
+          collected.push(...batch);
+        } catch (err) {
+          log(`Google Places tile failed: ${String(err)}`);
+        }
+      }
+      results = dedupeById(collected, (p) => p.placeId);
+    } else if (queryText) {
+      log(
+        `Google Places: text search "${queryText}"${
+          lat !== undefined && lng !== undefined ? ` biased near ${lat},${lng}` : ""
+        }`
+      );
+      results = await searchPlacesByText({
+        query: queryText,
+        lat,
+        lng,
+        radiusMiles: lat !== undefined && lng !== undefined ? radiusMiles : undefined,
+        category,
+        maxResults: Math.min(maxResults, 60),
+        signal,
+      });
+    } else {
+      log(`Google Places: missing query and category — nothing to search`);
+      return 0;
+    }
+  } catch (err) {
+    log(`Google Places query failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (results.length === 0) {
+    log(`Google Places: 0 results — try widening the radius or using free-text query`);
+    return 0;
+  }
+  log(`Google Places: ${results.length} candidate(s) before dedup, taking up to ${maxResults}`);
+
+  let inserted = 0;
+  for (const p of results.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = googlePlaceToLeadInput(p, searchId, category, geoLabel);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`Google Places: inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- Foursquare direct path -----------------------------------------------
+// Foursquare's circle search caps at 100km radius and 50 results per page,
+// but supports cursor pagination so a single radius call can sweep deeper
+// than Google's Nearby. We still fan a wide radius into tiles when the
+// caller asks for >25 mi to keep dense-metro coverage usable.
+async function runFoursquareDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const category = cfg.category;
+  const query = cfg.query;
+
+  const { lat, lng, geoLabel } = resolveLatLng(cfg);
+
+  const radiusMiles = cfg.radiusMiles ?? 10;
+  let results: FoursquarePlace[] = [];
+
+  try {
+    if (lat !== undefined && lng !== undefined) {
+      // Single call when the radius is small enough; tile when it's large.
+      if (radiusMiles <= 25) {
+        log(
+          `Foursquare: radius search ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+        );
+        results = await searchFoursquareRadius({
+          lat,
+          lng,
+          radiusMiles,
+          category,
+          query,
+          maxResults,
+          signal,
+        });
+      } else {
+        const tileMiles = suggestedTileMiles("foursquare", "med");
+        const tiles = tilesForRadius(lat, lng, radiusMiles, tileMiles, { maxTiles: 25 });
+        log(
+          `Foursquare: ${tiles.length} tile(s) of ~${tileMiles}mi covering ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+        );
+        const collected: FoursquarePlace[] = [];
+        for (const tile of tiles) {
+          if (signal.aborted) break;
+          if (collected.length >= maxResults) break;
+          try {
+            const batch = await searchFoursquareRadius({
+              lat: tile.lat,
+              lng: tile.lng,
+              radiusMiles: tile.radiusMiles,
+              category,
+              query,
+              maxResults: 50,
+              signal,
+            });
+            collected.push(...batch);
+          } catch (err) {
+            log(`Foursquare tile failed: ${String(err)}`);
+          }
+        }
+        results = dedupeById(collected, (p) => p.fsqId);
+      }
+    } else if (cfg.geo) {
+      log(`Foursquare: near "${cfg.geo}"`);
+      results = await searchFoursquareNear({
+        near: cfg.geo,
+        category,
+        query,
+        maxResults,
+        signal,
+      });
+    } else {
+      log(`Foursquare: missing geo — supply lat/lng, zip, or a "near" string`);
+      return 0;
+    }
+  } catch (err) {
+    log(`Foursquare query failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (results.length === 0) {
+    log(`Foursquare: 0 results — try a different category or widen the radius`);
+    return 0;
+  }
+  log(`Foursquare: ${results.length} candidate(s) before dedup, taking up to ${maxResults}`);
+
+  let inserted = 0;
+  for (const p of results.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = foursquarePlaceToLeadInput(p, searchId, category, geoLabel);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`Foursquare: inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- TomTom Search direct path -------------------------------------------
+// TomTom returns up to 100 results per call with a 50km radius cap. We
+// tile-fan when the requested radius is larger than ~30 mi, single-call
+// otherwise.
+async function runTomTomDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const category = cfg.category;
+  const query = cfg.query ?? cfg.category;
+
+  const { lat, lng, geoLabel } = resolveLatLng(cfg);
+  if (lat === undefined || lng === undefined) {
+    log(`TomTom: missing geo — supply lat/lng, zip, or a parseable city/zip in geo`);
+    return 0;
+  }
+
+  const radiusMiles = cfg.radiusMiles ?? 10;
+  let results: TomTomPlace[];
+  try {
+    if (radiusMiles <= 30) {
+      log(`TomTom: radius search ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`);
+      results = await searchTomTomRadius({
+        lat,
+        lng,
+        radiusMiles,
+        category,
+        query,
+        maxResults,
+        signal,
+      });
+    } else {
+      const tileMiles = suggestedTileMiles("tomtom", "med");
+      const tiles = tilesForRadius(lat, lng, radiusMiles, tileMiles, { maxTiles: 25 });
+      log(
+        `TomTom: ${tiles.length} tile(s) of ~${tileMiles}mi covering ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+      );
+      const collected: TomTomPlace[] = [];
+      for (const tile of tiles) {
+        if (signal.aborted) break;
+        if (collected.length >= maxResults) break;
+        try {
+          const batch = await searchTomTomRadius({
+            lat: tile.lat,
+            lng: tile.lng,
+            radiusMiles: tile.radiusMiles,
+            category,
+            query,
+            maxResults: 100,
+            signal,
+          });
+          collected.push(...batch);
+        } catch (err) {
+          log(`TomTom tile failed: ${String(err)}`);
+        }
+      }
+      results = dedupeById(collected, (p) => p.ttId);
+    }
+  } catch (err) {
+    log(`TomTom query failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (results.length === 0) {
+    log(`TomTom: 0 results — try a different category or widen the radius`);
+    return 0;
+  }
+  log(`TomTom: ${results.length} candidate(s) before dedup, taking up to ${maxResults}`);
+
+  let inserted = 0;
+  for (const p of results.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = tomtomPlaceToLeadInput(p, searchId, category, geoLabel);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`TomTom: inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- HERE Discover direct path -------------------------------------------
+// HERE caps at 100 results per call. /browse takes structured category
+// IDs (preferred when we have a preset); /discover takes free text. The
+// connector picks per-call automatically; the runner just decides
+// single-call vs. tile-fan based on requested radius.
+async function runHereDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const category = cfg.category;
+  const query = cfg.query ?? cfg.category;
+
+  const { lat, lng, geoLabel } = resolveLatLng(cfg);
+  if (lat === undefined || lng === undefined) {
+    log(`HERE: missing geo — supply lat/lng, zip, or a parseable city/zip in geo`);
+    return 0;
+  }
+
+  const radiusMiles = cfg.radiusMiles ?? 10;
+  let results: HerePlace[];
+  try {
+    if (radiusMiles <= 30) {
+      log(`HERE: radius search ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`);
+      results = await searchHerePlaces({
+        lat,
+        lng,
+        radiusMiles,
+        category,
+        query,
+        maxResults,
+        signal,
+      });
+    } else {
+      const tileMiles = suggestedTileMiles("here_places", "med");
+      const tiles = tilesForRadius(lat, lng, radiusMiles, tileMiles, { maxTiles: 25 });
+      log(
+        `HERE: ${tiles.length} tile(s) of ~${tileMiles}mi covering ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+      );
+      const collected: HerePlace[] = [];
+      for (const tile of tiles) {
+        if (signal.aborted) break;
+        if (collected.length >= maxResults) break;
+        try {
+          const batch = await searchHerePlaces({
+            lat: tile.lat,
+            lng: tile.lng,
+            radiusMiles: tile.radiusMiles,
+            category,
+            query,
+            maxResults: 100,
+            signal,
+          });
+          collected.push(...batch);
+        } catch (err) {
+          log(`HERE tile failed: ${String(err)}`);
+        }
+      }
+      results = dedupeById(collected, (p) => p.hereId);
+    }
+  } catch (err) {
+    log(`HERE query failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (results.length === 0) {
+    log(`HERE: 0 results — try a different category or widen the radius`);
+    return 0;
+  }
+  log(`HERE: ${results.length} candidate(s) before dedup, taking up to ${maxResults}`);
+
+  let inserted = 0;
+  for (const p of results.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = herePlaceToLeadInput(p, searchId, category, geoLabel);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`HERE: inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// Lat/lng resolver shared by all native point-anchored sources. Priority:
+// explicit cfg.lat/lng, then parsed geo string (zip / "lat,lng" forms),
+// then the first zip from cfg.zips. Returns undefined coords when the
+// caller didn't supply enough info — the per-source runner logs and
+// short-circuits.
+function resolveLatLng(cfg: DirectoryConfig): {
+  lat?: number;
+  lng?: number;
+  geoLabel?: string;
+} {
+  let lat = cfg.lat;
+  let lng = cfg.lng;
+  let geoLabel = cfg.geo;
+  if ((lat === undefined || lng === undefined) && cfg.geo) {
+    const parsed = parseGeoString(cfg.geo);
+    if (parsed.kind === "zip" || parsed.kind === "latlng") {
+      lat = parsed.lat;
+      lng = parsed.lng;
+      if (parsed.kind === "zip") geoLabel = `${parsed.city}, ${parsed.state} ${parsed.zip}`;
+    }
+  }
+  if ((lat === undefined || lng === undefined) && cfg.zips?.length) {
+    const rec = lookupZip(cfg.zips[0]);
+    if (rec) {
+      lat = rec.lat;
+      lng = rec.lng;
+      geoLabel = `${rec.city}, ${rec.state} ${rec.zip}`;
+    }
+  }
+  return { lat, lng, geoLabel };
+}
+
+// --- Apify direct path ----------------------------------------------------
+// Resolves cfg.actorId against the curated preset registry first (which
+// brings a typed input builder + lead adapter), and falls back to a
+// generic input + heuristic adapter when the user passed a raw
+// "username/actor" not in the registry. Cost from the run's
+// usageTotalUsd (when present) is rolled into the search's costUsd.
+async function runApifyDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<{ count: number; costUsd: number }> {
+  const actorRef = cfg.actorId?.trim();
+  if (!actorRef) {
+    log(`Apify: missing actorId — pick a preset or paste a "username/actor" ID`);
+    return { count: 0, costUsd: 0 };
+  }
+
+  const preset = getApifyPreset(actorRef);
+  const actorId = preset?.actorId ?? actorRef;
+  const inputBuilder =
+    preset?.inputBuilder ??
+    ((c: DirectoryConfig, n: number) => ({
+      // Generic shape: pass through the canonical search fields. Most
+      // actors accept at least one of these key names.
+      query: c.query ?? c.category,
+      keywords: c.query ?? c.category,
+      location: c.geo,
+      maxItems: Math.min(n, 200),
+    }));
+  const itemToLead =
+    preset?.itemToLead ??
+    ((item, sId, c) => genericItemToLead(item, sId, c));
+
+  const input = inputBuilder(cfg, maxResults);
+  log(
+    `Apify: running actor ${actorId}${preset ? ` (preset: ${preset.id})` : " (custom)"}`
+  );
+
+  let result;
+  try {
+    result = await runActorAndGetItems(actorId, input, {
+      signal,
+      itemLimit: Math.max(maxResults, 50),
+      onProgress: (run) => log(`Apify: run ${run.id} ${run.status}`),
+    });
+  } catch (err) {
+    log(`Apify run failed: ${String(err)}`);
+    return { count: 0, costUsd: 0 };
+  }
+
+  const items = result.items;
+  const costUsd = result.run.usageTotalUsd ?? 0;
+  log(`Apify: ${items.length} item(s) from run ${result.run.id}, cost $${costUsd.toFixed(4)}`);
+
+  let inserted = 0;
+  for (const item of items.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const adapted: ApifyLeadInput | undefined = itemToLead(item, searchId, cfg);
+    if (!adapted) continue;
+    const { lead, isNew } = insertLead(adapted);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`Apify: inserted ${inserted} new lead(s)`);
+  return { count: inserted, costUsd };
+}
+
+// --- Yelp Playwright direct path -----------------------------------------
+// Self-hosted scraper: requires playwright installed on the host. Reports
+// the install error in the search log and returns 0 when unavailable so
+// the runner doesn't crash.
+async function runYelpDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const term = cfg.query ?? cfg.category;
+  const geo = cfg.geo;
+  if (!term || !geo) {
+    log(`Yelp (Playwright): need both a query/category and a geo to search`);
+    return 0;
+  }
+
+  let businesses;
+  try {
+    log(`Yelp (Playwright): searching "${term}" near "${geo}"`);
+    businesses = await searchYelpDirect({
+      category: cfg.category,
+      query: cfg.query,
+      geo,
+      maxResults,
+      signal,
+    });
+  } catch (err) {
+    log(`Yelp (Playwright) failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (businesses.length === 0) {
+    log(`Yelp (Playwright): 0 results — try a different category or geo`);
+    return 0;
+  }
+  log(
+    `Yelp (Playwright): ${businesses.length} candidate(s) before dedup, taking up to ${maxResults}`
+  );
+
+  let inserted = 0;
+  for (const b of businesses.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = yelpDirectToLeadInput(b, searchId, cfg.category, geo);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`Yelp (Playwright): inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- BBB Playwright direct path ------------------------------------------
+// Same shape as runYelpDirect but pointed at bbb.org. BBB-specific tags
+// (accreditation, A-F rating, years in business) are folded into the
+// matchReason string by bbbDirectToLeadInput.
+async function runBbbDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const term = cfg.query ?? cfg.category;
+  const geo = cfg.geo;
+  if (!term || !geo) {
+    log(`BBB (Playwright): need both a query/category and a geo to search`);
+    return 0;
+  }
+
+  let businesses;
+  try {
+    log(`BBB (Playwright): searching "${term}" near "${geo}"`);
+    businesses = await searchBbbDirect({
+      category: cfg.category,
+      query: cfg.query,
+      geo,
+      maxResults,
+      signal,
+    });
+  } catch (err) {
+    log(`BBB (Playwright) failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (businesses.length === 0) {
+    log(`BBB (Playwright): 0 results — try a different category or geo`);
+    return 0;
+  }
+  log(
+    `BBB (Playwright): ${businesses.length} candidate(s) before dedup, taking up to ${maxResults}`
+  );
+
+  let inserted = 0;
+  for (const b of businesses.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = bbbDirectToLeadInput(b, searchId, cfg.category, geo);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`BBB (Playwright): inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- Bing Local Search direct path ---------------------------------------
+// Bing's Local Search caps at 25 results per call with no pagination, so
+// dense metros must be tile-fanned. We always tile when the requested
+// radius exceeds the per-call tile size to keep coverage uniform.
+async function runBingPlacesDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const category = cfg.category;
+  const query = cfg.query ?? cfg.category;
+
+  const { lat, lng, geoLabel } = resolveLatLng(cfg);
+
+  if (lat === undefined || lng === undefined) {
+    log(`Bing Local Search: missing geo — supply lat/lng, zip, or a parseable city/zip in geo`);
+    return 0;
+  }
+
+  const radiusMiles = cfg.radiusMiles ?? 10;
+  const tileMiles = suggestedTileMiles("bing_places", "med");
+  const tiles = tilesForRadius(lat, lng, radiusMiles, tileMiles, { maxTiles: 25 });
+  log(
+    `Bing Local Search: ${tiles.length} tile(s) of ~${tileMiles}mi covering ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+  );
+
+  const collected: BingPlace[] = [];
+  for (const tile of tiles) {
+    if (signal.aborted) break;
+    if (collected.length >= maxResults) break;
+    try {
+      const batch = await searchBingLocal({
+        lat: tile.lat,
+        lng: tile.lng,
+        radiusMiles: tile.radiusMiles,
+        category,
+        query,
+        maxResults: 25,
+        signal,
+      });
+      collected.push(...batch);
+    } catch (err) {
+      log(`Bing Local Search tile failed: ${String(err)}`);
+    }
+  }
+
+  const results = dedupeById(collected, (p) => p.bingId);
+  if (results.length === 0) {
+    log(`Bing Local Search: 0 results — try a different category preset or widen the radius`);
+    return 0;
+  }
+  log(`Bing Local Search: ${results.length} candidate(s) before dedup, taking up to ${maxResults}`);
+
+  let inserted = 0;
+  for (const p of results.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = bingPlaceToLeadInput(p, searchId, category, geoLabel);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`Bing Local Search: inserted ${inserted} new lead(s)`);
   return inserted;
 }
 

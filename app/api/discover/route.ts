@@ -58,6 +58,14 @@ const DirectoryConfigSchema = z
       "delivery_marketplace",
       "state_license_board",
       "state_sos",
+      "google_places",
+      "foursquare",
+      "bing_places",
+      "tomtom",
+      "here_places",
+      "apify",
+      "yelp_direct",
+      "bbb_direct",
     ]),
     category: z.string().trim().max(200).optional(),
     query: z.string().trim().max(500).optional(),
@@ -76,6 +84,14 @@ const DirectoryConfigSchema = z
       .trim()
       .length(2)
       .toUpperCase()
+      .optional(),
+    // Apify preset key (e.g. "yelp_businesses") or raw actor ID
+    // ("username/actor" or "username~actor").
+    actorId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(120)
       .optional(),
   })
   .refine(
@@ -104,6 +120,55 @@ const DirectoryConfigSchema = z
         const hasCat = !!(v.category || v.query);
         const hasGeo = !!(v.geo || v.lat !== undefined || v.zips?.length);
         return hasCat && hasGeo;
+      }
+      if (v.source === "google_places") {
+        // Text query alone is enough (Google Places Text Search). Nearby
+        // mode needs lat/lng + a category preset.
+        const hasQuery = !!(v.query || v.category);
+        const hasNearby =
+          v.lat !== undefined && v.lng !== undefined && !!v.category;
+        return hasQuery || hasNearby;
+      }
+      if (v.source === "foursquare") {
+        // Either a circle (lat/lng), a "near" string in `geo`, or a zip we
+        // can resolve. Plus a category or free-text query so we don't pull
+        // every place in the metro.
+        const hasGeo =
+          (v.lat !== undefined && v.lng !== undefined) ||
+          !!v.geo ||
+          !!v.zips?.length;
+        const hasFilter = !!(v.category || v.query);
+        return hasGeo && hasFilter;
+      }
+      if (v.source === "bing_places") {
+        // Bing requires a userLocation point — we accept lat/lng directly,
+        // a zip we can resolve, or a "near" string the runner can geocode.
+        const hasGeo =
+          (v.lat !== undefined && v.lng !== undefined) ||
+          !!v.geo ||
+          !!v.zips?.length;
+        const hasFilter = !!(v.category || v.query);
+        return hasGeo && hasFilter;
+      }
+      if (v.source === "tomtom" || v.source === "here_places") {
+        // Both APIs are point-anchored — we resolve a lat/lng from the
+        // user's input the same way as the other native connectors.
+        const hasGeo =
+          (v.lat !== undefined && v.lng !== undefined) ||
+          !!v.geo ||
+          !!v.zips?.length;
+        const hasFilter = !!(v.category || v.query);
+        return hasGeo && hasFilter;
+      }
+      if (v.source === "apify") {
+        // Need at minimum an actor ID and something to search for. Geo is
+        // optional because some actors (e.g. Crunchbase, Glassdoor) work
+        // without a location filter.
+        return !!v.actorId && !!(v.query || v.category);
+      }
+      if (v.source === "yelp_direct" || v.source === "bbb_direct") {
+        // Both scrapers' search forms require a term and a location.
+        return !!(v.category || v.query) && !!v.geo;
       }
       if (v.source === "state_license_board" || v.source === "state_sos") {
         return !!v.state;
