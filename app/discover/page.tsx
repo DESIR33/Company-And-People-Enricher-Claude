@@ -75,7 +75,10 @@ type DirectorySource =
   | "tripadvisor"
   | "delivery_marketplace"
   | "state_license_board"
-  | "state_sos";
+  | "state_sos"
+  | "google_places"
+  | "foursquare"
+  | "bing_places";
 
 type DirectoryConfig = {
   source: DirectorySource;
@@ -178,6 +181,9 @@ const LOCAL_DIRECTORY_SOURCES: DirectorySource[] = [
   "angi",
   "facebook_pages",
   "google_maps",
+  "google_places",
+  "foursquare",
+  "bing_places",
 ];
 
 function defaultEnrichFieldsForSearch(search: DiscoverySearch | null): string[] {
@@ -373,9 +379,27 @@ const DIRECTORY_META: Record<
   { label: string; icon: typeof BookOpen; hint: string; smbFriendly: boolean }
 > = {
   google_maps: {
-    label: "Google Maps",
+    label: "Google Maps (agent)",
     icon: MapPin,
-    hint: "Local businesses by category + geography. Best default for field-services.",
+    hint: "Agent-driven Google Maps search. Use Google Places (API) below for the deterministic, lower-cost native version.",
+    smbFriendly: true,
+  },
+  google_places: {
+    label: "Google Places (API)",
+    icon: MapPin,
+    hint: "Native Google Places API (New) — deterministic JSON, no LLM tokens. Tile fan-out covers dense metros despite the 20-result Nearby cap. Requires GOOGLE_PLACES_API_KEY.",
+    smbFriendly: true,
+  },
+  foursquare: {
+    label: "Foursquare (API)",
+    icon: Compass,
+    hint: "Native Foursquare Places API. Strongest international coverage; complements Google in ex-US metros. Requires FOURSQUARE_API_KEY.",
+    smbFriendly: true,
+  },
+  bing_places: {
+    label: "Bing Local Search (API)",
+    icon: Search,
+    hint: "Native Bing Maps Local Search API. Useful as a Google fallback in regions where Google quotas/coverage thin out. Requires BING_MAPS_API_KEY.",
     smbFriendly: true,
   },
   yelp: {
@@ -507,6 +531,9 @@ const DIRECTORY_META: Record<
 };
 
 const DIRECTORY_SOURCE_ORDER: DirectorySource[] = [
+  "google_places",
+  "foursquare",
+  "bing_places",
   "google_maps",
   "osm_overpass",
   "yelp",
@@ -697,6 +724,33 @@ function CreateSearchForm({
         !directoryConfig.query
       ) {
         return setError("Give a business category for this directory.");
+      }
+      if (dirSource === "google_places") {
+        const hasQuery = !!(directoryConfig.category || directoryConfig.query);
+        const hasNearby =
+          directoryConfig.lat !== undefined &&
+          directoryConfig.lng !== undefined &&
+          !!directoryConfig.category;
+        if (!hasQuery && !hasNearby) {
+          return setError(
+            "Google Places needs a category or free-text query (and a geo bias for Nearby Search)."
+          );
+        }
+      }
+      if (dirSource === "foursquare" || dirSource === "bing_places") {
+        const hasFilter = !!(directoryConfig.category || directoryConfig.query);
+        const hasGeo =
+          (directoryConfig.lat !== undefined && directoryConfig.lng !== undefined) ||
+          !!directoryConfig.geo ||
+          !!directoryConfig.zips?.length;
+        if (!hasFilter) {
+          return setError("Give a business category or query for this directory.");
+        }
+        if (!hasGeo) {
+          return setError(
+            "Give a geo (lat/lng + radius, zip, or city) so the search has something to scope to."
+          );
+        }
       }
 
       body = {
@@ -996,11 +1050,16 @@ function CreateSearchForm({
               dirSource === "nextdoor" ||
               dirSource === "opentable" ||
               dirSource === "tripadvisor" ||
-              dirSource === "delivery_marketplace") && (
+              dirSource === "delivery_marketplace" ||
+              dirSource === "google_places" ||
+              dirSource === "foursquare" ||
+              dirSource === "bing_places") && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
-                    {dirSource === "osm_overpass"
+                    {dirSource === "osm_overpass" ||
+                    dirSource === "google_places" ||
+                    dirSource === "foursquare"
                       ? "Category (preset key or free text)"
                       : "Business category"}
                   </label>
@@ -1014,7 +1073,9 @@ function CreateSearchForm({
                           dirSource === "tripadvisor" ||
                           dirSource === "delivery_marketplace"
                         ? "italian, sushi, pizza, brunch"
-                        : dirSource === "osm_overpass"
+                        : dirSource === "osm_overpass" ||
+                          dirSource === "google_places" ||
+                          dirSource === "foursquare"
                         ? "restaurant, plumber, roofer, hair, dentist"
                         : "HVAC contractor, dentist, gym"
                     }
@@ -1136,7 +1197,10 @@ function CreateSearchForm({
               dirSource === "nextdoor" ||
               dirSource === "opentable" ||
               dirSource === "tripadvisor" ||
-              dirSource === "delivery_marketplace") && (
+              dirSource === "delivery_marketplace" ||
+              dirSource === "google_places" ||
+              dirSource === "foursquare" ||
+              dirSource === "bing_places") && (
               <details className="rounded-lg border border-cloudy/30 bg-pampas/40">
                 <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-gray-700 flex items-center gap-1.5">
                   <Compass className="w-3.5 h-3.5 text-cloudy" strokeWidth={2} />

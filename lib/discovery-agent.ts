@@ -801,6 +801,25 @@ Workflow:
 
 Target: ${params.maxResults} Foursquare-listed businesses.`;
     }
+
+    case "bing_places": {
+      // Normally served by the runner via Bing Local Search. Agent fallback
+      // runs only if BING_MAPS_API_KEY is missing or the direct call failed.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      return `Find up to ${params.maxResults} businesses on Bing Maps matching the criteria.
+
+Category: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Search Bing Maps (https://www.bing.com/maps) for the category in the geo.
+2. For each: companyName, websiteUrl, phone, streetAddress, city, region, postalCode, lat, lng.
+3. matchReason MUST cite Bing Maps and the listing's category.
+4. Skip closed listings.
+
+Target: ${params.maxResults} Bing Maps-listed businesses.`;
+    }
   }
 }
 

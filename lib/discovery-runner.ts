@@ -31,6 +31,11 @@ import {
   searchFoursquareRadius,
   type FoursquarePlace,
 } from "./directories/foursquare";
+import {
+  bingPlaceToLeadInput,
+  searchBingLocal,
+  type BingPlace,
+} from "./directories/bing-places";
 import { getStateRegistry } from "./directories/state-registries";
 import { expandZipsForRadius, lookupZip, parseGeoString } from "./geo";
 import { dedupeById, suggestedTileMiles, tilesForRadius } from "./geo-fan";
@@ -124,6 +129,39 @@ export async function executeSearch(
       appendDiscoveryLog(
         searchId,
         `Search ${status}: ${count} Google Places businesses (Google quota only)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: Bing Local Search ---------------------------
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "bing_places"
+    ) {
+      const count = await runBingPlacesDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `Bing Local Search returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} Bing businesses (Bing quota only)`
       );
       await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
         appendDiscoveryLog(searchId, line)
@@ -579,6 +617,94 @@ async function runFoursquareDirect(
     }
   }
   log(`Foursquare: inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- Bing Local Search direct path ---------------------------------------
+// Bing's Local Search caps at 25 results per call with no pagination, so
+// dense metros must be tile-fanned. We always tile when the requested
+// radius exceeds the per-call tile size to keep coverage uniform.
+async function runBingPlacesDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const category = cfg.category;
+  const query = cfg.query ?? cfg.category;
+
+  let lat = cfg.lat;
+  let lng = cfg.lng;
+  let geoLabel = cfg.geo;
+  if ((lat === undefined || lng === undefined) && cfg.geo) {
+    const parsed = parseGeoString(cfg.geo);
+    if (parsed.kind === "zip" || parsed.kind === "latlng") {
+      lat = parsed.lat;
+      lng = parsed.lng;
+      if (parsed.kind === "zip") geoLabel = `${parsed.city}, ${parsed.state} ${parsed.zip}`;
+    }
+  }
+  if ((lat === undefined || lng === undefined) && cfg.zips?.length) {
+    const rec = lookupZip(cfg.zips[0]);
+    if (rec) {
+      lat = rec.lat;
+      lng = rec.lng;
+      geoLabel = `${rec.city}, ${rec.state} ${rec.zip}`;
+    }
+  }
+
+  if (lat === undefined || lng === undefined) {
+    log(`Bing Local Search: missing geo — supply lat/lng, zip, or a parseable city/zip in geo`);
+    return 0;
+  }
+
+  const radiusMiles = cfg.radiusMiles ?? 10;
+  const tileMiles = suggestedTileMiles("bing_places", "med");
+  const tiles = tilesForRadius(lat, lng, radiusMiles, tileMiles, { maxTiles: 25 });
+  log(
+    `Bing Local Search: ${tiles.length} tile(s) of ~${tileMiles}mi covering ${radiusMiles}mi around ${lat.toFixed(4)},${lng.toFixed(4)}`
+  );
+
+  const collected: BingPlace[] = [];
+  for (const tile of tiles) {
+    if (signal.aborted) break;
+    if (collected.length >= maxResults) break;
+    try {
+      const batch = await searchBingLocal({
+        lat: tile.lat,
+        lng: tile.lng,
+        radiusMiles: tile.radiusMiles,
+        category,
+        query,
+        maxResults: 25,
+        signal,
+      });
+      collected.push(...batch);
+    } catch (err) {
+      log(`Bing Local Search tile failed: ${String(err)}`);
+    }
+  }
+
+  const results = dedupeById(collected, (p) => p.bingId);
+  if (results.length === 0) {
+    log(`Bing Local Search: 0 results — try a different category preset or widen the radius`);
+    return 0;
+  }
+  log(`Bing Local Search: ${results.length} candidate(s) before dedup, taking up to ${maxResults}`);
+
+  let inserted = 0;
+  for (const p of results.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = bingPlaceToLeadInput(p, searchId, category, geoLabel);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`Bing Local Search: inserted ${inserted} new lead(s)`);
   return inserted;
 }
 

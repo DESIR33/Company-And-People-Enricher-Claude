@@ -60,6 +60,7 @@ const DirectoryConfigSchema = z
       "state_sos",
       "google_places",
       "foursquare",
+      "bing_places",
     ]),
     category: z.string().trim().max(200).optional(),
     query: z.string().trim().max(500).optional(),
@@ -119,6 +120,16 @@ const DirectoryConfigSchema = z
         // Either a circle (lat/lng), a "near" string in `geo`, or a zip we
         // can resolve. Plus a category or free-text query so we don't pull
         // every place in the metro.
+        const hasGeo =
+          (v.lat !== undefined && v.lng !== undefined) ||
+          !!v.geo ||
+          !!v.zips?.length;
+        const hasFilter = !!(v.category || v.query);
+        return hasGeo && hasFilter;
+      }
+      if (v.source === "bing_places") {
+        // Bing requires a userLocation point — we accept lat/lng directly,
+        // a zip we can resolve, or a "near" string the runner can geocode.
         const hasGeo =
           (v.lat !== undefined && v.lng !== undefined) ||
           !!v.geo ||

@@ -36,7 +36,8 @@ export type DirectorySource =
   | "state_license_board"
   | "state_sos"
   | "google_places"
-  | "foursquare";
+  | "foursquare"
+  | "bing_places";
 
 export type DirectoryConfig = {
   source: DirectorySource;
