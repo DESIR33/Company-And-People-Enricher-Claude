@@ -46,6 +46,12 @@ import {
   searchHerePlaces,
   type HerePlace,
 } from "./directories/here-places";
+import {
+  genericItemToLead,
+  getApifyPreset,
+  type ApifyLeadInput,
+} from "./directories/apify-actors";
+import { runActorAndGetItems } from "./scrapers/apify";
 import { getStateRegistry } from "./directories/state-registries";
 import { expandZipsForRadius, lookupZip, parseGeoString } from "./geo";
 import { dedupeById, suggestedTileMiles, tilesForRadius } from "./geo-fan";
@@ -139,6 +145,45 @@ export async function executeSearch(
       appendDiscoveryLog(
         searchId,
         `Search ${status}: ${count} Google Places businesses (Google quota only)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: Apify (LinkedIn / Glassdoor / Yelp / etc.) ---
+    // Apify wraps the directories that block direct fetches. The runner
+    // selects an actor via cfg.actorId (preset key or raw `user/actor`),
+    // builds the actor input from the directoryConfig, runs it, and maps
+    // returned dataset items to leads.
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "apify"
+    ) {
+      const result = await runApifyDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = result.count;
+      totalCost += result.costUsd;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `Apify actor returned ${result.count} business(es).`,
+      });
+      if (totalCost > 0) recordUsage(0, totalCost);
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${result.count} Apify items, $${totalCost.toFixed(4)}`
       );
       await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
         appendDiscoveryLog(searchId, line)
@@ -865,6 +910,78 @@ function resolveLatLng(cfg: DirectoryConfig): {
     }
   }
   return { lat, lng, geoLabel };
+}
+
+// --- Apify direct path ----------------------------------------------------
+// Resolves cfg.actorId against the curated preset registry first (which
+// brings a typed input builder + lead adapter), and falls back to a
+// generic input + heuristic adapter when the user passed a raw
+// "username/actor" not in the registry. Cost from the run's
+// usageTotalUsd (when present) is rolled into the search's costUsd.
+async function runApifyDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<{ count: number; costUsd: number }> {
+  const actorRef = cfg.actorId?.trim();
+  if (!actorRef) {
+    log(`Apify: missing actorId — pick a preset or paste a "username/actor" ID`);
+    return { count: 0, costUsd: 0 };
+  }
+
+  const preset = getApifyPreset(actorRef);
+  const actorId = preset?.actorId ?? actorRef;
+  const inputBuilder =
+    preset?.inputBuilder ??
+    ((c: DirectoryConfig, n: number) => ({
+      // Generic shape: pass through the canonical search fields. Most
+      // actors accept at least one of these key names.
+      query: c.query ?? c.category,
+      keywords: c.query ?? c.category,
+      location: c.geo,
+      maxItems: Math.min(n, 200),
+    }));
+  const itemToLead =
+    preset?.itemToLead ??
+    ((item, sId, c) => genericItemToLead(item, sId, c));
+
+  const input = inputBuilder(cfg, maxResults);
+  log(
+    `Apify: running actor ${actorId}${preset ? ` (preset: ${preset.id})` : " (custom)"}`
+  );
+
+  let result;
+  try {
+    result = await runActorAndGetItems(actorId, input, {
+      signal,
+      itemLimit: Math.max(maxResults, 50),
+      onProgress: (run) => log(`Apify: run ${run.id} ${run.status}`),
+    });
+  } catch (err) {
+    log(`Apify run failed: ${String(err)}`);
+    return { count: 0, costUsd: 0 };
+  }
+
+  const items = result.items;
+  const costUsd = result.run.usageTotalUsd ?? 0;
+  log(`Apify: ${items.length} item(s) from run ${result.run.id}, cost $${costUsd.toFixed(4)}`);
+
+  let inserted = 0;
+  for (const item of items.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const adapted: ApifyLeadInput | undefined = itemToLead(item, searchId, cfg);
+    if (!adapted) continue;
+    const { lead, isNew } = insertLead(adapted);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`Apify: inserted ${inserted} new lead(s)`);
+  return { count: inserted, costUsd };
 }
 
 // --- Bing Local Search direct path ---------------------------------------

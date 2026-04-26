@@ -39,7 +39,8 @@ export type DirectorySource =
   | "foursquare"
   | "bing_places"
   | "tomtom"
-  | "here_places";
+  | "here_places"
+  | "apify";
 
 export type DirectoryConfig = {
   source: DirectorySource;
@@ -61,6 +62,10 @@ export type DirectoryConfig = {
   // For state-scoped directories (state_license_board, state_sos): two-letter
   // postal abbreviation, e.g. "CA", "TX".
   state?: string;
+  // Apify (Phase 2.1): selects a curated actor preset by id (see
+  // lib/directories/apify-actors.ts) or accepts a raw `username/actor` /
+  // `username~actor` for custom actors that don't have a preset.
+  actorId?: string;
 };
 
 export type DiscoveryStatus =

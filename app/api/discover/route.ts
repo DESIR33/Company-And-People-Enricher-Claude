@@ -63,6 +63,7 @@ const DirectoryConfigSchema = z
       "bing_places",
       "tomtom",
       "here_places",
+      "apify",
     ]),
     category: z.string().trim().max(200).optional(),
     query: z.string().trim().max(500).optional(),
@@ -81,6 +82,14 @@ const DirectoryConfigSchema = z
       .trim()
       .length(2)
       .toUpperCase()
+      .optional(),
+    // Apify preset key (e.g. "yelp_businesses") or raw actor ID
+    // ("username/actor" or "username~actor").
+    actorId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(120)
       .optional(),
   })
   .refine(
@@ -148,6 +157,12 @@ const DirectoryConfigSchema = z
           !!v.zips?.length;
         const hasFilter = !!(v.category || v.query);
         return hasGeo && hasFilter;
+      }
+      if (v.source === "apify") {
+        // Need at minimum an actor ID and something to search for. Geo is
+        // optional because some actors (e.g. Crunchbase, Glassdoor) work
+        // without a location filter.
+        return !!v.actorId && !!(v.query || v.category);
       }
       if (v.source === "state_license_board" || v.source === "state_sos") {
         return !!v.state;

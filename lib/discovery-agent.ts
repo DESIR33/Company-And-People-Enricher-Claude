@@ -860,6 +860,27 @@ Workflow:
 
 Target: ${params.maxResults} HERE-listed businesses.`;
     }
+
+    case "apify": {
+      // Normally served by the runner via the Apify API. This agent
+      // fallback only runs if APIFY_API_TOKEN is missing or the actor
+      // failed — we describe what the actor would have searched for so
+      // the agent can imitate it via the open web.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = renderGeoBlock(cfg);
+      const actor = cfg.actorId ?? "(unspecified)";
+      return `An Apify actor (${actor}) was requested but is unavailable. Approximate the same query through the open web.
+
+Search target: ${category}
+Geo: ${geo}${extra}
+
+Workflow:
+1. Identify what the actor was meant to scrape from its name (e.g. "linkedin-companies" → LinkedIn company pages, "yelp-scraper" → Yelp listings, "crunchbase-scraper" → Crunchbase profiles).
+2. Run a web search constrained to that platform: site:linkedin.com/company, site:yelp.com/biz, site:crunchbase.com/organization, etc.
+3. For each: companyName, websiteUrl, phone, location, and a matchReason that cites the source page.
+
+Target: ${params.maxResults} companies imitating the requested actor.`;
+    }
   }
 }
 

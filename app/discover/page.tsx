@@ -80,7 +80,8 @@ type DirectorySource =
   | "foursquare"
   | "bing_places"
   | "tomtom"
-  | "here_places";
+  | "here_places"
+  | "apify";
 
 type DirectoryConfig = {
   source: DirectorySource;
@@ -96,6 +97,7 @@ type DirectoryConfig = {
   zips?: string[];
   msaCode?: string;
   state?: string;
+  actorId?: string;
 };
 type DiscoveryStatus =
   | "queued"
@@ -188,6 +190,7 @@ const LOCAL_DIRECTORY_SOURCES: DirectorySource[] = [
   "bing_places",
   "tomtom",
   "here_places",
+  "apify",
 ];
 
 function defaultEnrichFieldsForSearch(search: DiscoverySearch | null): string[] {
@@ -418,6 +421,12 @@ const DIRECTORY_META: Record<
     hint: "Native HERE Discover/Browse API. Best-in-class European POI coverage and vehicle-routing-grade addresses. Requires HERE_API_KEY.",
     smbFriendly: true,
   },
+  apify: {
+    label: "Apify (LinkedIn / Glassdoor / Crunchbase / etc.)",
+    icon: Sparkles,
+    hint: "Run battle-tested Apify actors for sites that block direct fetches: LinkedIn, Glassdoor, Crunchbase, Yelp, Google Maps, Instagram. Apify handles proxies, browsers, and CAPTCHAs. Requires APIFY_API_TOKEN; pay per actor run.",
+    smbFriendly: true,
+  },
   yelp: {
     label: "Yelp",
     icon: Star,
@@ -552,6 +561,7 @@ const DIRECTORY_SOURCE_ORDER: DirectorySource[] = [
   "tomtom",
   "here_places",
   "bing_places",
+  "apify",
   "google_maps",
   "osm_overpass",
   "yelp",
@@ -606,6 +616,8 @@ function CreateSearchForm({
   const [dirRadius, setDirRadius] = useState("");
   const [dirZips, setDirZips] = useState("");
   const [dirState, setDirState] = useState("");
+  // Phase 2.1 — Apify actor ID (preset key or custom user/actor).
+  const [dirActorId, setDirActorId] = useState("");
   // Phase 1.4 — discovery webhook URL.
   const [webhookUrl, setWebhookUrl] = useState("");
 
@@ -673,6 +685,7 @@ function CreateSearchForm({
       if (dirBatch.trim()) directoryConfig.batch = dirBatch.trim();
       if (dirState.trim())
         directoryConfig.state = dirState.trim().toUpperCase().slice(0, 2);
+      if (dirActorId.trim()) directoryConfig.actorId = dirActorId.trim();
       const latNum = parseFloat(dirLat);
       const lngNum = parseFloat(dirLng);
       const radNum = parseFloat(dirRadius);
@@ -772,6 +785,18 @@ function CreateSearchForm({
         if (!hasGeo) {
           return setError(
             "Give a geo (lat/lng + radius, zip, or city) so the search has something to scope to."
+          );
+        }
+      }
+      if (dirSource === "apify") {
+        if (!directoryConfig.actorId) {
+          return setError(
+            "Pick an Apify actor preset, or paste a custom \"username/actor\" ID."
+          );
+        }
+        if (!directoryConfig.category && !directoryConfig.query) {
+          return setError(
+            "Give a search query (or category) so the actor knows what to look for."
           );
         }
       }
@@ -1207,6 +1232,65 @@ function CreateSearchForm({
                 <p className="text-[11px] text-cloudy mt-1">
                   Google-style query. Firecrawl runs the search and pre-scrapes the top 10 results into clean markdown. The agent extracts companies from those blocks.
                 </p>
+              </div>
+            )}
+
+            {dirSource === "apify" && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Actor
+                  </label>
+                  <select
+                    value={dirActorId}
+                    onChange={(e) => setDirActorId(e.target.value)}
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition bg-white"
+                  >
+                    <option value="">Pick an actor…</option>
+                    <option value="linkedin_companies">LinkedIn Companies</option>
+                    <option value="glassdoor_companies">Glassdoor Companies</option>
+                    <option value="crunchbase_companies">Crunchbase Companies</option>
+                    <option value="yelp_businesses">Yelp Businesses</option>
+                    <option value="google_maps_businesses">Google Maps (via Apify)</option>
+                    <option value="instagram_business_search">Instagram Business Search</option>
+                  </select>
+                  <p className="text-[11px] text-cloudy mt-1">
+                    Or type a custom <code>username/actor</code> ID below to use an unlisted actor.
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Custom actor (overrides preset)
+                  </label>
+                  <input
+                    value={dirActorId.includes("/") || dirActorId.includes("~") ? dirActorId : ""}
+                    onChange={(e) => setDirActorId(e.target.value)}
+                    placeholder="apify/web-scraper"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition font-mono text-[12px]"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Search query
+                  </label>
+                  <input
+                    value={dirQuery}
+                    onChange={(e) => setDirQuery(e.target.value)}
+                    placeholder="HVAC contractor — passed to the actor as keywords/query/searchTerms"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Location <span className="text-cloudy font-normal">(optional, location-aware actors only)</span>
+                  </label>
+                  <input
+                    value={dirGeo}
+                    onChange={(e) => setDirGeo(e.target.value)}
+                    placeholder="Austin, TX"
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
               </div>
             )}
 
