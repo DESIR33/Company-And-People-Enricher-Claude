@@ -56,6 +56,10 @@ import {
   searchYelpDirect,
   yelpDirectToLeadInput,
 } from "./directories/yelp-direct";
+import {
+  bbbDirectToLeadInput,
+  searchBbbDirect,
+} from "./directories/bbb-direct";
 import { getStateRegistry } from "./directories/state-registries";
 import { expandZipsForRadius, lookupZip, parseGeoString } from "./geo";
 import { dedupeById, suggestedTileMiles, tilesForRadius } from "./geo-fan";
@@ -185,6 +189,42 @@ export async function executeSearch(
       appendDiscoveryLog(
         searchId,
         `Search ${status}: ${count} Yelp businesses (Playwright direct)`
+      );
+      await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
+        appendDiscoveryLog(searchId, line)
+      );
+      return;
+    }
+
+    // ----- Direct API path: BBB via Playwright --------------------------
+    // Self-hosted scraper. BBB is a high-signal SMB directory: every
+    // listing is verified, accredited businesses score higher, A-F
+    // letter rating + years in business surface in matchReason.
+    if (
+      init.mode === "directory" &&
+      init.directoryConfig?.source === "bbb_direct"
+    ) {
+      const count = await runBbbDirect(
+        init.directoryConfig,
+        init.maxResults,
+        searchId,
+        abort.signal,
+        (line) => appendDiscoveryLog(searchId, line),
+        (lead) => insertedLeads.push(lead)
+      );
+      discoveredCount = count;
+      const completedAt = Date.now();
+      const status = abort.signal.aborted ? "cancelled" : "completed";
+      updateSearch(searchId, {
+        status,
+        completedAt,
+        discoveredCount,
+        costUsd: totalCost,
+        agentNote: `BBB (Playwright) returned ${count} business(es).`,
+      });
+      appendDiscoveryLog(
+        searchId,
+        `Search ${status}: ${count} BBB businesses (Playwright direct)`
       );
       await maybeDeliverWebhook(init.webhookUrl, searchId, insertedLeads, (line) =>
         appendDiscoveryLog(searchId, line)
@@ -1077,6 +1117,62 @@ async function runYelpDirect(
     }
   }
   log(`Yelp (Playwright): inserted ${inserted} new lead(s)`);
+  return inserted;
+}
+
+// --- BBB Playwright direct path ------------------------------------------
+// Same shape as runYelpDirect but pointed at bbb.org. BBB-specific tags
+// (accreditation, A-F rating, years in business) are folded into the
+// matchReason string by bbbDirectToLeadInput.
+async function runBbbDirect(
+  cfg: DirectoryConfig,
+  maxResults: number,
+  searchId: string,
+  signal: AbortSignal,
+  log: (line: string) => void,
+  onInsert: (lead: DiscoveredLead) => void
+): Promise<number> {
+  const term = cfg.query ?? cfg.category;
+  const geo = cfg.geo;
+  if (!term || !geo) {
+    log(`BBB (Playwright): need both a query/category and a geo to search`);
+    return 0;
+  }
+
+  let businesses;
+  try {
+    log(`BBB (Playwright): searching "${term}" near "${geo}"`);
+    businesses = await searchBbbDirect({
+      category: cfg.category,
+      query: cfg.query,
+      geo,
+      maxResults,
+      signal,
+    });
+  } catch (err) {
+    log(`BBB (Playwright) failed: ${String(err)}`);
+    return 0;
+  }
+
+  if (businesses.length === 0) {
+    log(`BBB (Playwright): 0 results — try a different category or geo`);
+    return 0;
+  }
+  log(
+    `BBB (Playwright): ${businesses.length} candidate(s) before dedup, taking up to ${maxResults}`
+  );
+
+  let inserted = 0;
+  for (const b of businesses.slice(0, maxResults)) {
+    if (signal.aborted) break;
+    const input = bbbDirectToLeadInput(b, searchId, cfg.category, geo);
+    const { lead, isNew } = insertLead(input);
+    if (isNew) {
+      inserted += 1;
+      onInsert(lead);
+    }
+  }
+  log(`BBB (Playwright): inserted ${inserted} new lead(s)`);
   return inserted;
 }
 

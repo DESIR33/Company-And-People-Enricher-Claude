@@ -65,6 +65,7 @@ const DirectoryConfigSchema = z
       "here_places",
       "apify",
       "yelp_direct",
+      "bbb_direct",
     ]),
     category: z.string().trim().max(200).optional(),
     query: z.string().trim().max(500).optional(),
@@ -165,8 +166,8 @@ const DirectoryConfigSchema = z
         // without a location filter.
         return !!v.actorId && !!(v.query || v.category);
       }
-      if (v.source === "yelp_direct") {
-        // Yelp's search requires both a term and a location.
+      if (v.source === "yelp_direct" || v.source === "bbb_direct") {
+        // Both scrapers' search forms require a term and a location.
         return !!(v.category || v.query) && !!v.geo;
       }
       if (v.source === "state_license_board" || v.source === "state_sos") {

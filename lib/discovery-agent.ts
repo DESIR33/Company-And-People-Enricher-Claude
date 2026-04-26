@@ -861,6 +861,28 @@ Workflow:
 Target: ${params.maxResults} HERE-listed businesses.`;
     }
 
+    case "bbb_direct": {
+      // Normally served by the runner via Playwright + the BBB listing
+      // page parser. Agent fallback runs when Playwright isn't installed
+      // (e.g. Vercel) or the scraper failed. Mirrors the existing `bbb`
+      // case workflow.
+      const category = cfg.category ?? cfg.query ?? "(none)";
+      const geo = cfg.geo ?? "(none)";
+      return `Pull up to ${params.maxResults} BBB-listed local businesses (Playwright unavailable — use web search).
+
+Category: ${category}
+Geography: ${geo}${extra}
+
+Workflow:
+1. Start at https://www.bbb.org/search?find_country=USA&find_text=${encodeURIComponent(category)}&find_loc=${encodeURIComponent(geo)}.
+2. Prefer accredited (A+ / A) listings.
+3. Capture name, website (from the BBB profile, NOT the BBB URL), phone, address, years in business, BBB letter rating, accreditation status.
+4. matchReason MUST cite BBB rating + years in business + accreditation when present.
+5. If BBB blocks the fetch, fall back to "site:bbb.org/us/<state> <category> <city>" web search.
+
+Target: ${params.maxResults} BBB-listed local businesses.`;
+    }
+
     case "yelp_direct": {
       // Normally served by the runner via Playwright + the Yelp listing
       // page parser. Agent fallback runs when Playwright isn't installed

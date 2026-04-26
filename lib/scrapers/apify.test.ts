@@ -152,23 +152,22 @@ describe("apify client", () => {
     });
 
     it("throws if maxWait elapses before completion", async () => {
-      // First poll returns RUNNING; subsequent polls would too, but we cap
-      // wait so the deadline trips before the second call.
-      mockFetch([
-        () =>
-          jsonResponse({
-            data: {
-              id: "run-1",
-              actId: "act-1",
-              status: "RUNNING",
-              startedAt: "2026-04-26T00:00:00Z",
-              defaultDatasetId: "ds-1",
-              defaultKeyValueStoreId: "kv-1",
-            },
-          }),
-      ]);
+      // Always-RUNNING mock; with a short maxWait the deadline check
+      // trips after the first sleep regardless of how many polls happened.
+      globalThis.fetch = vi.fn(async () =>
+        jsonResponse({
+          data: {
+            id: "run-1",
+            actId: "act-1",
+            status: "RUNNING",
+            startedAt: "2026-04-26T00:00:00Z",
+            defaultDatasetId: "ds-1",
+            defaultKeyValueStoreId: "kv-1",
+          },
+        })
+      ) as typeof fetch;
       await expect(
-        waitForRun("run-1", { pollIntervalMs: 1, maxWaitMs: 0 })
+        waitForRun("run-1", { pollIntervalMs: 5, maxWaitMs: 10 })
       ).rejects.toThrow(/did not finish/);
     });
 

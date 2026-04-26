@@ -41,7 +41,8 @@ export type DirectorySource =
   | "tomtom"
   | "here_places"
   | "apify"
-  | "yelp_direct";
+  | "yelp_direct"
+  | "bbb_direct";
 
 export type DirectoryConfig = {
   source: DirectorySource;
