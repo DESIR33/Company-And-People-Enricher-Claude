@@ -278,6 +278,50 @@ describe("upsertCanonicalCompany", () => {
     expect(company?.seenInSources).toEqual(["google_places"]);
   });
 
+  it("backfillCanonicalLinks resolves leads inserted before the hook ran", async () => {
+    const store = await import("./discovery-store");
+    const workspaceId = "ws-backfill";
+    const search = store.createSearch({
+      workspaceId,
+      mode: "directory",
+      name: "yelp search",
+      queryText: "",
+      directoryConfig: { source: "yelp_direct", category: "plumber" },
+      maxResults: 10,
+    });
+
+    // Simulate a lead that landed BEFORE Phase 3 by inserting + then
+    // clearing canonical_company_id directly. The hook will fire on
+    // insert, populate the FK, and we manually NULL it to set up the
+    // backfill scenario.
+    const inserted = store.insertLead({
+      searchId: search.id,
+      companyName: "Backfill Plumbing",
+      phone: "5556660001",
+      lat: 33.749,
+      lng: -84.388,
+    });
+    expect(inserted.lead.canonicalCompanyId).toBeDefined();
+
+    const { getDb } = await import("./db");
+    const db = getDb();
+    db.prepare(
+      `UPDATE discovered_leads SET canonical_company_id = NULL WHERE id = ?`
+    ).run(inserted.lead.id);
+
+    const result = mod.backfillCanonicalLinks({ workspaceId });
+    expect(result.processed).toBe(1);
+    expect(result.linked).toBe(1);
+    expect(result.skipped).toBe(0);
+
+    const after = db
+      .prepare(
+        `SELECT canonical_company_id FROM discovered_leads WHERE id = ?`
+      )
+      .get(inserted.lead.id) as { canonical_company_id: string | null };
+    expect(after.canonical_company_id).toBeTruthy();
+  });
+
   it("listCanonicalCompaniesByWorkspace honors workspace + minSources filter", () => {
     const workspaceId = ws();
     // 1 source.

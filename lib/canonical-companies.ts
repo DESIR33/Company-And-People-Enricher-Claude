@@ -769,3 +769,90 @@ export function listCanonicalCompaniesByWorkspace(
     .all(workspaceId, minSources, limit) as CanonicalRow[];
   return rows.map(rowToCompany);
 }
+
+// One-shot backfill: walks every discovered_lead row that doesn't yet
+// have a canonical_company_id and runs it through the link hook. Use
+// this once after deploying Phase 3 to populate the canonical table
+// from existing leads. Idempotent — running it again is a no-op
+// because every lead now has a non-null FK.
+export type BackfillResult = {
+  processed: number;
+  linked: number;
+  skipped: number;
+};
+
+export function backfillCanonicalLinks(opts: {
+  workspaceId?: string;
+  batchSize?: number;
+  maxRows?: number;
+} = {}): BackfillResult {
+  const db = getDb();
+  const batchSize = Math.min(Math.max(opts.batchSize ?? 200, 10), 1000);
+  const maxRows = opts.maxRows ?? Infinity;
+
+  // Resolve workspace scope by joining through discovery_searches, since
+  // discovered_leads doesn't carry workspace_id directly.
+  const where = opts.workspaceId
+    ? `WHERE l.canonical_company_id IS NULL AND s.workspace_id = ?`
+    : `WHERE l.canonical_company_id IS NULL`;
+
+  const result: BackfillResult = { processed: 0, linked: 0, skipped: 0 };
+
+  while (result.processed < maxRows) {
+    const remaining = maxRows - result.processed;
+    const limit = Math.min(batchSize, remaining);
+    const rows = (
+      opts.workspaceId
+        ? db
+            .prepare(
+              `SELECT l.* FROM discovered_leads l
+               JOIN discovery_searches s ON s.id = l.search_id
+               ${where}
+               ORDER BY l.created_at ASC
+               LIMIT ?`
+            )
+            .all(opts.workspaceId, limit)
+        : db
+            .prepare(
+              `SELECT l.* FROM discovered_leads l
+               JOIN discovery_searches s ON s.id = l.search_id
+               ${where}
+               ORDER BY l.created_at ASC
+               LIMIT ?`
+            )
+            .all(limit)
+    ) as Array<Record<string, unknown> & { id: string; search_id: string; company_name: string }>;
+
+    if (rows.length === 0) break;
+
+    for (const r of rows) {
+      result.processed += 1;
+      // Reconstruct enough of a DiscoveredLead for the linker — only
+      // fields linkLeadToCanonical reads.
+      const lead: DiscoveredLead = {
+        id: r.id,
+        searchId: r.search_id,
+        companyName: r.company_name,
+        websiteUrl: (r.website_url as string | null) ?? undefined,
+        phone: (r.phone as string | null) ?? undefined,
+        streetAddress: (r.street_address as string | null) ?? undefined,
+        city: (r.city as string | null) ?? undefined,
+        region: (r.region as string | null) ?? undefined,
+        postalCode: (r.postal_code as string | null) ?? undefined,
+        countryCode: (r.country_code as string | null) ?? undefined,
+        lat: (r.lat as number | null) ?? undefined,
+        lng: (r.lng as number | null) ?? undefined,
+        industry: (r.industry as string | null) ?? undefined,
+        hours: (r.hours as string | null) ?? undefined,
+        naicsCode: (r.naics_code as string | null) ?? undefined,
+        licenseNumber: (r.license_number as string | null) ?? undefined,
+        createdAt: r.created_at as number,
+      };
+      const company = linkLeadToCanonical(lead.searchId, lead);
+      if (company) result.linked += 1;
+      else result.skipped += 1;
+    }
+  }
+
+  return result;
+}
