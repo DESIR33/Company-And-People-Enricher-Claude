@@ -131,6 +131,9 @@ export type DiscoveredLead = {
   naicsCode?: string;
   licenseNumber?: string;
   firstSeenAt?: number;
+  // Phase 3 — link to the cross-source canonical company. Populated via
+  // canonical-companies.linkLeadToCanonical after a lead lands.
+  canonicalCompanyId?: string;
 };
 
 type SearchRow = {
@@ -184,6 +187,7 @@ type LeadRow = {
   license_number: string | null;
   first_seen_at: number | null;
   identity_key: string | null;
+  canonical_company_id: string | null;
 };
 
 function searchFromRow(r: SearchRow): DiscoverySearch {
@@ -239,7 +243,29 @@ function leadFromRow(r: LeadRow): DiscoveredLead {
     naicsCode: r.naics_code ?? undefined,
     licenseNumber: r.license_number ?? undefined,
     firstSeenAt: r.first_seen_at ?? undefined,
+    canonicalCompanyId: r.canonical_company_id ?? undefined,
   };
+}
+
+// --------------------------------------------------------------------------
+// Lead after-insert hook (Phase 3)
+// --------------------------------------------------------------------------
+// canonical-companies.ts registers a hook here at module load time so every
+// insertLead call gets cross-source canonical resolution without each call
+// site needing to invoke it. The dependency arrow runs from
+// canonical-companies → discovery-store, never the other way, which avoids
+// a circular import.
+
+type LeadAfterInsertHook = (
+  searchId: string,
+  lead: DiscoveredLead,
+  isNew: boolean
+) => void;
+
+let afterInsertHook: LeadAfterInsertHook | undefined;
+
+export function registerLeadAfterInsertHook(hook: LeadAfterInsertHook): void {
+  afterInsertHook = hook;
 }
 
 // --------------------------------------------------------------------------
@@ -648,7 +674,18 @@ export function insertLead(params: InsertLeadInput): InsertLeadResult {
     const row = db
       .prepare(`SELECT * FROM discovered_leads WHERE id = ?`)
       .get(existing.id) as LeadRow;
-    return { lead: leadFromRow(row), isNew: false };
+    const mergedLead = leadFromRow(row);
+    try {
+      afterInsertHook?.(params.searchId, mergedLead, false);
+    } catch {
+      // Hook is best-effort; never let canonical resolution failures
+      // surface as insert failures.
+    }
+    // Re-fetch to pick up canonical_company_id the hook may have set.
+    const finalRow = db
+      .prepare(`SELECT * FROM discovered_leads WHERE id = ?`)
+      .get(existing.id) as LeadRow;
+    return { lead: leadFromRow(finalRow), isNew: false };
   }
 
   const id = uuidv4();
@@ -700,7 +737,17 @@ export function insertLead(params: InsertLeadInput): InsertLeadResult {
   const row = db
     .prepare(`SELECT * FROM discovered_leads WHERE id = ?`)
     .get(id) as LeadRow;
-  return { lead: leadFromRow(row), isNew: true };
+  const freshLead = leadFromRow(row);
+  try {
+    afterInsertHook?.(params.searchId, freshLead, true);
+  } catch {
+    // best-effort — see merged-update branch above
+  }
+  // Re-fetch to pick up canonical_company_id the hook may have populated.
+  const finalRow = db
+    .prepare(`SELECT * FROM discovered_leads WHERE id = ?`)
+    .get(id) as LeadRow;
+  return { lead: leadFromRow(finalRow), isNew: true };
 }
 
 function mergeLeadFields(existing: LeadRow, incoming: InsertLeadInput) {

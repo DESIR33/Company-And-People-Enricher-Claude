@@ -60,6 +60,10 @@ import {
   bbbDirectToLeadInput,
   searchBbbDirect,
 } from "./directories/bbb-direct";
+// Side-effect import: registers the canonical-company linkage hook so every
+// lead inserted by this runner gets resolved into a cross-source canonical
+// record. Must be imported before any search executes.
+import "./canonical-companies";
 import { getStateRegistry } from "./directories/state-registries";
 import { expandZipsForRadius, lookupZip, parseGeoString } from "./geo";
 import { dedupeById, suggestedTileMiles, tilesForRadius } from "./geo-fan";
