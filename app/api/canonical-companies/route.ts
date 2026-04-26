@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listCanonicalCompaniesByWorkspace } from "@/lib/canonical-companies";
-// Side-effect import: registers the lead-after-insert hook so any insertLead
-// fired downstream of this route gets canonical resolution. Defensive — the
-// hook is also registered by discovery-runner, but importing it here means
-// API-only deployments never miss the wiring.
+// Side-effect imports — register the lead-after-insert hook (canonical
+// resolution) and the canonical-after-upsert hook (background signal
+// auto-enrich). Defensive: both hooks are also registered by
+// discovery-runner, but importing them here means API-only deployments
+// never miss the wiring.
 import "@/lib/canonical-companies";
+import "@/lib/signals/enrich-canonical";
 import { getActiveWorkspaceId } from "@/lib/workspace-context";
 
 export async function GET(request: NextRequest) {

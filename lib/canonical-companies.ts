@@ -511,6 +511,35 @@ export function mergeCanonical(
   return merged;
 }
 
+// --- Upsert hook ----------------------------------------------------------
+// Phase 4.2 — signals/enrich-canonical registers here at module load so
+// every canonical upsert can trigger auto-enrichment without
+// canonical-companies importing the signals layer (which would cycle).
+// Hook fires for both new inserts and field-merge updates; the consumer
+// decides whether to act based on age/TTL.
+
+type CanonicalAfterUpsertHook = (
+  company: CanonicalCompany,
+  isNew: boolean
+) => void;
+
+let afterUpsertHook: CanonicalAfterUpsertHook | undefined;
+
+export function registerCanonicalAfterUpsertHook(
+  hook: CanonicalAfterUpsertHook
+): void {
+  afterUpsertHook = hook;
+}
+
+function fireUpsertHook(company: CanonicalCompany, isNew: boolean): void {
+  if (!afterUpsertHook) return;
+  try {
+    afterUpsertHook(company, isNew);
+  } catch {
+    // best-effort — auto-enrich failures must never surface as upsert errors
+  }
+}
+
 // --- Upsert ---------------------------------------------------------------
 
 export function upsertCanonicalCompany(
@@ -585,6 +614,7 @@ export function upsertCanonicalCompany(
       lastSeenAt: merged.lastSeenAt,
       updatedAt: merged.updatedAt,
     });
+    fireUpsertHook(merged, false);
     return merged;
   }
 
@@ -698,6 +728,7 @@ export function upsertCanonicalCompany(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
+  fireUpsertHook(row, true);
   return row;
 }
 

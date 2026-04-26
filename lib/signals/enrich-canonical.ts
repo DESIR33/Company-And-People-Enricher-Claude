@@ -15,6 +15,7 @@
 import { getDb } from "../db";
 import {
   getCanonicalCompany,
+  registerCanonicalAfterUpsertHook,
   type CanonicalCompany,
 } from "../canonical-companies";
 import { detectTechStack } from "./tech-stack";
@@ -146,3 +147,98 @@ export async function enrichCanonicalSignals(
   applySignalsToCanonical(id, signals);
   return { ok: true, changed: signals, errors };
 }
+
+// --- Auto-enrich queue ----------------------------------------------------
+// Phase 4.2 — every canonical upsert can trigger background enrichment so
+// users don't have to click "Enrich" on each row. Bounded so a discovery
+// run that lands 100 SMBs at once doesn't slam crt.sh / rdap.org / 100
+// company websites simultaneously.
+//
+// Design points:
+//   - In-process queue + dedup. Survives only as long as the Node
+//     process; that's fine — discovery work is also in-process.
+//   - TTL guard so re-merging an already-enriched company doesn't
+//     re-fetch (default 7 days).
+//   - Concurrency cap (default 3) keeps load on free upstream APIs
+//     polite.
+//   - No domain → skip enqueue entirely (nothing to enrich).
+//   - Fully optional — flip AUTO_ENRICH_SIGNALS=0 to disable.
+
+const AUTO_ENRICH_ENABLED =
+  (process.env.AUTO_ENRICH_SIGNALS ?? "1") !== "0";
+const AUTO_ENRICH_TTL_MS =
+  Math.max(0, Number(process.env.AUTO_ENRICH_TTL_DAYS ?? "7")) *
+  24 *
+  60 *
+  60 *
+  1000;
+const AUTO_ENRICH_MAX_CONCURRENCY = Math.max(
+  1,
+  Number(process.env.AUTO_ENRICH_MAX_CONCURRENCY ?? "3")
+);
+
+const queue: string[] = [];
+const inFlight = new Set<string>();
+let activeWorkers = 0;
+// Test seam — vitest replaces this so suites can assert that enqueue
+// actually fired without spinning up real fetches.
+let runner: (id: string) => Promise<unknown> = enrichCanonicalSignals;
+
+export function _setAutoEnrichRunnerForTests(
+  fn: (id: string) => Promise<unknown>
+): () => void {
+  const prev = runner;
+  runner = fn;
+  return () => {
+    runner = prev;
+  };
+}
+
+export function _resetAutoEnrichQueueForTests(): void {
+  queue.length = 0;
+  inFlight.clear();
+  activeWorkers = 0;
+}
+
+export function enqueueAutoEnrich(
+  company: Pick<CanonicalCompany, "id" | "domain" | "websiteUrl" | "signalsUpdatedAt">
+): boolean {
+  if (!AUTO_ENRICH_ENABLED) return false;
+  if (!company.domain && !company.websiteUrl) return false;
+  if (
+    company.signalsUpdatedAt !== undefined &&
+    Date.now() - company.signalsUpdatedAt < AUTO_ENRICH_TTL_MS
+  ) {
+    return false;
+  }
+  if (inFlight.has(company.id)) return false;
+  if (queue.includes(company.id)) return false;
+  queue.push(company.id);
+  pumpQueue();
+  return true;
+}
+
+function pumpQueue(): void {
+  while (activeWorkers < AUTO_ENRICH_MAX_CONCURRENCY && queue.length > 0) {
+    const id = queue.shift();
+    if (!id || inFlight.has(id)) continue;
+    inFlight.add(id);
+    activeWorkers += 1;
+    runner(id)
+      .catch(() => {
+        // best-effort — failure of one row shouldn't stall the queue
+      })
+      .finally(() => {
+        inFlight.delete(id);
+        activeWorkers -= 1;
+        pumpQueue();
+      });
+  }
+}
+
+// Register the upsert hook at module load so any consumer that imports
+// this file (typically discovery-runner via side-effect import) wires
+// auto-enrichment for free.
+registerCanonicalAfterUpsertHook((company) => {
+  enqueueAutoEnrich(company);
+});

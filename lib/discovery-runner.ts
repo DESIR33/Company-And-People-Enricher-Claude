@@ -64,6 +64,11 @@ import {
 // lead inserted by this runner gets resolved into a cross-source canonical
 // record. Must be imported before any search executes.
 import "./canonical-companies";
+// Side-effect import: registers the auto-enrich upsert hook so canonical
+// companies with a domain get tech-stack/RDAP/CT-log signals fetched in the
+// background without a user click. Bounded queue + TTL guard live in the
+// module; this import is just the wiring.
+import "./signals/enrich-canonical";
 import { getStateRegistry } from "./directories/state-registries";
 import { expandZipsForRadius, lookupZip, parseGeoString } from "./geo";
 import { dedupeById, suggestedTileMiles, tilesForRadius } from "./geo-fan";
