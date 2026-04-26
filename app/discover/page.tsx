@@ -27,6 +27,17 @@ import {
   Hammer,
   ThumbsUp,
   Flame,
+  Map,
+  Building2,
+  Home,
+  Users,
+  Utensils,
+  Truck,
+  Compass,
+  FileText,
+  BadgeCheck,
+  Webhook,
+  Upload,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { COMPANY_FIELD_GROUPS } from "@/lib/enrichment-fields";
@@ -38,6 +49,8 @@ type DiscoveryMode =
   | "signal_hiring"
   | "signal_news"
   | "signal_reviews"
+  | "signal_new_business"
+  | "signal_license"
   | "directory";
 
 type DirectorySource =
@@ -51,7 +64,18 @@ type DirectorySource =
   | "bbb"
   | "angi"
   | "facebook_pages"
-  | "firecrawl_search";
+  | "firecrawl_search"
+  | "osm_overpass"
+  | "google_lsa"
+  | "yellowpages"
+  | "manta"
+  | "houzz"
+  | "nextdoor"
+  | "opentable"
+  | "tripadvisor"
+  | "delivery_marketplace"
+  | "state_license_board"
+  | "state_sos";
 
 type DirectoryConfig = {
   source: DirectorySource;
@@ -61,6 +85,12 @@ type DirectoryConfig = {
   url?: string;
   techStack?: string;
   batch?: string;
+  lat?: number;
+  lng?: number;
+  radiusMiles?: number;
+  zips?: string[];
+  msaCode?: string;
+  state?: string;
 };
 type DiscoveryStatus =
   | "queued"
@@ -86,6 +116,7 @@ type DiscoverySearch = {
   discoveryLog: string[];
   agentNote?: string;
   error?: string;
+  webhookUrl?: string;
 };
 
 type DiscoveredLead = {
@@ -102,6 +133,16 @@ type DiscoveredLead = {
   sourceUrl?: string;
   score?: number;
   createdAt: number;
+  phone?: string;
+  streetAddress?: string;
+  city?: string;
+  region?: string;
+  postalCode?: string;
+  countryCode?: string;
+  lat?: number;
+  lng?: number;
+  hours?: string;
+  licenseNumber?: string;
 };
 
 const DEFAULT_ENRICH_FIELDS = [
@@ -397,14 +438,91 @@ const DIRECTORY_META: Record<
     hint: "Commercial orgs behind active repos. For dev-tool ICPs.",
     smbFriendly: false,
   },
+  osm_overpass: {
+    label: "OpenStreetMap (radius)",
+    icon: Compass,
+    hint: "Free Overpass API — true lat/lng + radius queries. No API key, no agent cost. Best when you need NAP data fast.",
+    smbFriendly: true,
+  },
+  google_lsa: {
+    label: "Google Local Services",
+    icon: BadgeCheck,
+    hint: "Google-vetted, license-verified pros. Highest-intent home-services lead source — every pro is reviewed by Google.",
+    smbFriendly: true,
+  },
+  yellowpages: {
+    label: "Yellow Pages",
+    icon: BookOpen,
+    hint: "Broadest US SMB directory long-tail. Phone + address on every listing.",
+    smbFriendly: true,
+  },
+  manta: {
+    label: "Manta",
+    icon: Building2,
+    hint: "US SMB directory with NAICS codes, employee bands, and revenue ranges.",
+    smbFriendly: true,
+  },
+  houzz: {
+    label: "Houzz",
+    icon: Home,
+    hint: "Home pros — designers, contractors, landscapers, remodelers. Best for premium home-services ICPs.",
+    smbFriendly: true,
+  },
+  nextdoor: {
+    label: "Nextdoor (best-effort)",
+    icon: Users,
+    hint: "Nextdoor business pages — best-effort discovery via Google indexed pages. Owners actively reply on this platform.",
+    smbFriendly: true,
+  },
+  opentable: {
+    label: "OpenTable",
+    icon: Utensils,
+    hint: "Restaurants — every OT-listed venue is reachable for vendor / SaaS / marketing pitches.",
+    smbFriendly: true,
+  },
+  tripadvisor: {
+    label: "TripAdvisor",
+    icon: Map,
+    hint: "Restaurants, hotels, tours. Cross-source dedup with OpenTable / Yelp.",
+    smbFriendly: true,
+  },
+  delivery_marketplace: {
+    label: "Delivery Marketplaces",
+    icon: Truck,
+    hint: "DoorDash + Uber Eats + Grubhub. Every listed restaurant is signed up = reachable.",
+    smbFriendly: true,
+  },
+  state_license_board: {
+    label: "State License Boards",
+    icon: BadgeCheck,
+    hint: "State contractor / professional licenses (CSLB CA, TDLR TX, DBPR FL, NY DOS, GA SOS). License # + status + issue date.",
+    smbFriendly: true,
+  },
+  state_sos: {
+    label: "State SoS Filings",
+    icon: FileText,
+    hint: "State Secretary-of-State business filings. Newly registered LLCs/Inc — \"just opened\" signal.",
+    smbFriendly: true,
+  },
 };
 
 const DIRECTORY_SOURCE_ORDER: DirectorySource[] = [
   "google_maps",
+  "osm_overpass",
   "yelp",
+  "google_lsa",
+  "yellowpages",
   "bbb",
   "angi",
+  "houzz",
+  "manta",
+  "opentable",
+  "tripadvisor",
+  "delivery_marketplace",
   "facebook_pages",
+  "nextdoor",
+  "state_license_board",
+  "state_sos",
   "firecrawl_search",
   "tech_stack",
   "custom",
@@ -437,15 +555,42 @@ function CreateSearchForm({
   const [dirTechStack, setDirTechStack] = useState("");
   const [dirBatch, setDirBatch] = useState("");
   const [dirExtra, setDirExtra] = useState("");
+  // Phase 1.3 — geo precision inputs.
+  const [dirLat, setDirLat] = useState("");
+  const [dirLng, setDirLng] = useState("");
+  const [dirRadius, setDirRadius] = useState("");
+  const [dirZips, setDirZips] = useState("");
+  const [dirState, setDirState] = useState("");
+  // Phase 1.4 — discovery webhook URL.
+  const [webhookUrl, setWebhookUrl] = useState("");
 
+  // Phase 4.17 — raised cap, plus CSV upload support for lookalike seeds.
   const seedCompanies = useMemo(
     () =>
       seedText
-        .split(/\n/)
+        .split(/[\n,]/)
         .map((s) => s.trim())
         .filter(Boolean)
-        .slice(0, 10),
+        .slice(0, 200),
     [seedText]
+  );
+
+  const handleSeedCsv = useCallback(
+    async (file: File) => {
+      const text = await file.text();
+      // Light CSV handling — first non-empty cell of each row. Accepts plain
+      // newline-delimited lists too (which is how the textarea ingests).
+      const lines = text
+        .split(/\r?\n/)
+        .map((l) => l.split(",")[0]?.trim())
+        .filter((s): s is string => !!s && s.length > 0);
+      // Drop a likely header row (e.g. "Company,Website").
+      if (lines[0] && /^(company|domain|name|website|url)/i.test(lines[0])) {
+        lines.shift();
+      }
+      setSeedText(lines.join("\n"));
+    },
+    [setSeedText]
   );
 
   const submit = async () => {
@@ -481,6 +626,23 @@ function CreateSearchForm({
       if (dirUrl.trim()) directoryConfig.url = dirUrl.trim();
       if (dirTechStack.trim()) directoryConfig.techStack = dirTechStack.trim();
       if (dirBatch.trim()) directoryConfig.batch = dirBatch.trim();
+      if (dirState.trim())
+        directoryConfig.state = dirState.trim().toUpperCase().slice(0, 2);
+      const latNum = parseFloat(dirLat);
+      const lngNum = parseFloat(dirLng);
+      const radNum = parseFloat(dirRadius);
+      if (Number.isFinite(latNum) && latNum >= -90 && latNum <= 90)
+        directoryConfig.lat = latNum;
+      if (Number.isFinite(lngNum) && lngNum >= -180 && lngNum <= 180)
+        directoryConfig.lng = lngNum;
+      if (Number.isFinite(radNum) && radNum > 0 && radNum <= 500)
+        directoryConfig.radiusMiles = radNum;
+      const zipList = dirZips
+        .split(/[,\s]+/)
+        .map((z) => z.trim())
+        .filter((z) => /^\d{5}$/.test(z))
+        .slice(0, 50);
+      if (zipList.length > 0) directoryConfig.zips = zipList;
 
       if (dirSource === "custom" && !directoryConfig.url)
         return setError("Paste the directory URL to fetch from.");
@@ -499,6 +661,43 @@ function CreateSearchForm({
         return setError(
           "Give at least one filter (category, free-text, or batch) so the agent has something to search for."
         );
+      if (dirSource === "osm_overpass") {
+        if (!directoryConfig.category && !directoryConfig.query)
+          return setError(
+            "Give a category for OSM (e.g. 'restaurant', 'plumber', 'roofer')."
+          );
+        if (
+          directoryConfig.lat === undefined &&
+          !directoryConfig.geo &&
+          !directoryConfig.zips?.length
+        ) {
+          return setError(
+            "OSM Overpass needs a geo: lat/lng + radius, a zip code, or a city name."
+          );
+        }
+      }
+      if (
+        (dirSource === "state_license_board" || dirSource === "state_sos") &&
+        !directoryConfig.state
+      ) {
+        return setError(
+          "Pick a state (CA, TX, FL, NY, GA) for state-registry search."
+        );
+      }
+      if (
+        (dirSource === "yellowpages" ||
+          dirSource === "manta" ||
+          dirSource === "houzz" ||
+          dirSource === "google_lsa" ||
+          dirSource === "nextdoor" ||
+          dirSource === "opentable" ||
+          dirSource === "tripadvisor" ||
+          dirSource === "delivery_marketplace") &&
+        !directoryConfig.category &&
+        !directoryConfig.query
+      ) {
+        return setError("Give a business category for this directory.");
+      }
 
       body = {
         mode: "directory",
@@ -507,6 +706,17 @@ function CreateSearchForm({
         queryText: dirExtra.trim(),
         maxResults,
       };
+    }
+
+    if (webhookUrl.trim()) {
+      try {
+        new URL(webhookUrl.trim());
+        body.webhookUrl = webhookUrl.trim();
+      } catch {
+        return setError(
+          "Webhook URL is not a valid URL (e.g. https://example.com/hook)"
+        );
+      }
     }
 
     setSubmitting(true);
@@ -607,8 +817,22 @@ function CreateSearchForm({
               {seedCompanies.length > 0 && (
                 <p className="text-[11px] text-cloudy mt-1">
                   {seedCompanies.length} seed{seedCompanies.length !== 1 ? "s" : ""} parsed
+                  {seedCompanies.length >= 200 && " (capped at 200)"}
                 </p>
               )}
+              <label className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-cloudy/40 text-[11px] text-gray-600 hover:bg-pampas cursor-pointer transition-colors">
+                <Upload className="w-3 h-3" strokeWidth={2} />
+                Upload CSV of seeds
+                <input
+                  type="file"
+                  accept=".csv,text/csv,text/plain"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void handleSeedCsv(f);
+                  }}
+                />
+              </label>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -763,18 +987,35 @@ function CreateSearchForm({
               dirSource === "yelp" ||
               dirSource === "bbb" ||
               dirSource === "angi" ||
-              dirSource === "facebook_pages") && (
+              dirSource === "facebook_pages" ||
+              dirSource === "osm_overpass" ||
+              dirSource === "google_lsa" ||
+              dirSource === "yellowpages" ||
+              dirSource === "manta" ||
+              dirSource === "houzz" ||
+              dirSource === "nextdoor" ||
+              dirSource === "opentable" ||
+              dirSource === "tripadvisor" ||
+              dirSource === "delivery_marketplace") && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
-                    Business category
+                    {dirSource === "osm_overpass"
+                      ? "Category (preset key or free text)"
+                      : "Business category"}
                   </label>
                   <input
                     value={dirCategory}
                     onChange={(e) => setDirCategory(e.target.value)}
                     placeholder={
-                      dirSource === "angi"
+                      dirSource === "angi" || dirSource === "houzz"
                         ? "plumber, roofer, electrician"
+                        : dirSource === "opentable" ||
+                          dirSource === "tripadvisor" ||
+                          dirSource === "delivery_marketplace"
+                        ? "italian, sushi, pizza, brunch"
+                        : dirSource === "osm_overpass"
+                        ? "restaurant, plumber, roofer, hair, dentist"
                         : "HVAC contractor, dentist, gym"
                     }
                     className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
@@ -879,6 +1120,117 @@ function CreateSearchForm({
               </div>
             )}
 
+            {/* Phase 1.3 — radius/zip/MSA inputs. Power-user precision geo for any
+                local-business directory; agents can still ignore them when not
+                needed. */}
+            {(dirSource === "google_maps" ||
+              dirSource === "yelp" ||
+              dirSource === "bbb" ||
+              dirSource === "angi" ||
+              dirSource === "facebook_pages" ||
+              dirSource === "osm_overpass" ||
+              dirSource === "google_lsa" ||
+              dirSource === "yellowpages" ||
+              dirSource === "manta" ||
+              dirSource === "houzz" ||
+              dirSource === "nextdoor" ||
+              dirSource === "opentable" ||
+              dirSource === "tripadvisor" ||
+              dirSource === "delivery_marketplace") && (
+              <details className="rounded-lg border border-cloudy/30 bg-pampas/40">
+                <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-gray-700 flex items-center gap-1.5">
+                  <Compass className="w-3.5 h-3.5 text-cloudy" strokeWidth={2} />
+                  Precision geo (lat/lng + radius, zip list){" "}
+                  <span className="text-cloudy font-normal">— optional</span>
+                </summary>
+                <div className="p-3 grid grid-cols-1 md:grid-cols-3 gap-3 border-t border-cloudy/30">
+                  <div>
+                    <label className="block text-[11px] font-medium text-gray-600 mb-1">
+                      Latitude
+                    </label>
+                    <input
+                      value={dirLat}
+                      onChange={(e) => setDirLat(e.target.value)}
+                      placeholder="33.879"
+                      className="w-full border border-cloudy/40 rounded-md px-2 py-1.5 text-xs tabular focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-gray-600 mb-1">
+                      Longitude
+                    </label>
+                    <input
+                      value={dirLng}
+                      onChange={(e) => setDirLng(e.target.value)}
+                      placeholder="-84.459"
+                      className="w-full border border-cloudy/40 rounded-md px-2 py-1.5 text-xs tabular focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-gray-600 mb-1">
+                      Radius (mi)
+                    </label>
+                    <input
+                      value={dirRadius}
+                      onChange={(e) => setDirRadius(e.target.value)}
+                      placeholder="25"
+                      className="w-full border border-cloudy/40 rounded-md px-2 py-1.5 text-xs tabular focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                    />
+                  </div>
+                  <div className="md:col-span-3">
+                    <label className="block text-[11px] font-medium text-gray-600 mb-1">
+                      Zip codes <span className="text-cloudy font-normal">(comma- or space-separated, max 50)</span>
+                    </label>
+                    <input
+                      value={dirZips}
+                      onChange={(e) => setDirZips(e.target.value)}
+                      placeholder="30339, 30303, 30309"
+                      className="w-full border border-cloudy/40 rounded-md px-2 py-1.5 text-xs tabular focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                    />
+                    <p className="text-[10px] text-cloudy mt-1">
+                      Used to fan a city-wide search out into specific zip slices. With lat/lng + radius the runner auto-expands to bundled zips inside the circle.
+                    </p>
+                  </div>
+                </div>
+              </details>
+            )}
+
+            {/* Phase 2.12 — state-scoped sources. */}
+            {(dirSource === "state_license_board" || dirSource === "state_sos") && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    State <span className="text-cloudy font-normal">(2-letter postal code)</span>
+                  </label>
+                  <input
+                    value={dirState}
+                    onChange={(e) => setDirState(e.target.value)}
+                    placeholder="CA, TX, FL, NY, GA"
+                    maxLength={2}
+                    className="w-32 border border-cloudy/40 rounded-lg px-3 py-2 text-sm uppercase focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    {dirSource === "state_license_board"
+                      ? "License type"
+                      : "NAICS / industry filter"}{" "}
+                    <span className="text-cloudy font-normal">(optional)</span>
+                  </label>
+                  <input
+                    value={dirCategory}
+                    onChange={(e) => setDirCategory(e.target.value)}
+                    placeholder={
+                      dirSource === "state_license_board"
+                        ? "general contractor, plumbing, electrical, HVAC"
+                        : "722511 (limited-service restaurants), 238220 (plumbing/HVAC)"
+                    }
+                    className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+                  />
+                </div>
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Additional ICP constraints <span className="text-cloudy font-normal">(optional)</span>
@@ -893,6 +1245,25 @@ function CreateSearchForm({
             </div>
           </>
         )}
+
+        {/* Phase 1.4 — webhook URL applies to all modes. Each new lead is
+            POSTed to this URL during the run so a CRM can subscribe to
+            discovery deltas instead of polling. */}
+        <div>
+          <label className=" text-xs font-medium text-gray-600 mb-1 inline-flex items-center gap-1.5">
+            <Webhook className="w-3.5 h-3.5 text-cloudy" strokeWidth={2} />
+            Webhook URL <span className="text-cloudy font-normal">(optional)</span>
+          </label>
+          <input
+            value={webhookUrl}
+            onChange={(e) => setWebhookUrl(e.target.value)}
+            placeholder="https://your-crm.example.com/hooks/leads"
+            className="w-full border border-cloudy/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent transition"
+          />
+          <p className="text-[11px] text-cloudy mt-1">
+            POSTed once per new lead with the full lead payload (name, phone, address, lat/lng, source, score). Failures are non-blocking.
+          </p>
+        </div>
 
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">

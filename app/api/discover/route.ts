@@ -5,6 +5,7 @@ import { startSearch } from "@/lib/discovery-runner";
 import { getActiveWorkspaceId } from "@/lib/workspace-context";
 
 const MAX_RESULTS_LIMIT = 50;
+const MAX_LOOKALIKE_SEEDS = 200;
 
 const IcpSchema = z.object({
   mode: z.literal("icp"),
@@ -15,17 +16,21 @@ const IcpSchema = z.object({
     .min(10, "Describe the ICP in at least a sentence (≥10 chars)")
     .max(2000),
   maxResults: z.number().int().min(1).max(MAX_RESULTS_LIMIT).default(25),
+  webhookUrl: z.string().trim().url().max(500).optional(),
 });
 
+// Phase 4.17: lookalike seed cap raised from 10 to MAX_LOOKALIKE_SEEDS so a
+// CRM win list (often 50-200 companies) can drive discovery in one pass.
 const LookalikeSchema = z.object({
   mode: z.literal("lookalike"),
   name: z.string().trim().min(1).max(120),
   seedCompanies: z
     .array(z.string().trim().min(1).max(300))
     .min(1, "Paste at least one seed company")
-    .max(10),
+    .max(MAX_LOOKALIKE_SEEDS),
   queryText: z.string().trim().max(2000).default(""),
   maxResults: z.number().int().min(1).max(MAX_RESULTS_LIMIT).default(25),
+  webhookUrl: z.string().trim().url().max(500).optional(),
 });
 
 const DirectoryConfigSchema = z
@@ -42,6 +47,17 @@ const DirectoryConfigSchema = z
       "angi",
       "facebook_pages",
       "firecrawl_search",
+      "osm_overpass",
+      "google_lsa",
+      "yellowpages",
+      "manta",
+      "houzz",
+      "nextdoor",
+      "opentable",
+      "tripadvisor",
+      "delivery_marketplace",
+      "state_license_board",
+      "state_sos",
     ]),
     category: z.string().trim().max(200).optional(),
     query: z.string().trim().max(500).optional(),
@@ -49,6 +65,18 @@ const DirectoryConfigSchema = z
     url: z.string().trim().url().max(500).optional(),
     techStack: z.string().trim().max(200).optional(),
     batch: z.string().trim().max(40).optional(),
+    // Phase 1.3: precise geo inputs.
+    lat: z.number().gte(-90).lte(90).optional(),
+    lng: z.number().gte(-180).lte(180).optional(),
+    radiusMiles: z.number().positive().max(500).optional(),
+    zips: z.array(z.string().trim().regex(/^\d{5}$/)).max(50).optional(),
+    msaCode: z.string().trim().max(10).optional(),
+    state: z
+      .string()
+      .trim()
+      .length(2)
+      .toUpperCase()
+      .optional(),
   })
   .refine(
     (v) => {
@@ -58,6 +86,27 @@ const DirectoryConfigSchema = z
       if (v.source === "firecrawl_search") return !!(v.query || v.category);
       if (v.source === "yelp" || v.source === "bbb" || v.source === "angi" || v.source === "facebook_pages") {
         return !!(v.category || v.query);
+      }
+      if (
+        v.source === "yellowpages" ||
+        v.source === "manta" ||
+        v.source === "houzz" ||
+        v.source === "google_lsa" ||
+        v.source === "nextdoor" ||
+        v.source === "opentable" ||
+        v.source === "tripadvisor" ||
+        v.source === "delivery_marketplace"
+      ) {
+        return !!(v.category || v.query);
+      }
+      if (v.source === "osm_overpass") {
+        // Needs either a category and a geo / lat-lng / zips.
+        const hasCat = !!(v.category || v.query);
+        const hasGeo = !!(v.geo || v.lat !== undefined || v.zips?.length);
+        return hasCat && hasGeo;
+      }
+      if (v.source === "state_license_board" || v.source === "state_sos") {
+        return !!v.state;
       }
       return true;
     },
@@ -70,6 +119,7 @@ const DirectorySchema = z.object({
   directoryConfig: DirectoryConfigSchema,
   queryText: z.string().trim().max(2000).default(""),
   maxResults: z.number().int().min(1).max(MAX_RESULTS_LIMIT).default(25),
+  webhookUrl: z.string().trim().url().max(500).optional(),
 });
 
 const CreateSearchSchema = z.discriminatedUnion("mode", [
@@ -112,6 +162,7 @@ export async function POST(request: NextRequest) {
     seedCompanies: data.mode === "lookalike" ? data.seedCompanies : undefined,
     directoryConfig: data.mode === "directory" ? data.directoryConfig : undefined,
     maxResults: data.maxResults,
+    webhookUrl: data.webhookUrl,
   });
 
   if (result.status === "cap_exceeded") {

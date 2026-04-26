@@ -48,9 +48,31 @@ const NewsSchema = BaseSchema.extend({
 
 const ReviewsSchema = BaseSchema.extend({
   signalType: z.literal("reviews"),
-  reviewPlatform: z.enum(["google", "yelp", "any"]).default("google"),
-  reviewSentiment: z.enum(["positive", "negative", "any"]).default("any"),
+  reviewPlatform: z
+    .enum(["google", "yelp", "tripadvisor", "any"])
+    .default("google"),
+  reviewSentiment: z
+    .enum(["positive", "negative", "new_on_platform", "any"])
+    .default("any"),
   minReviewCount: z.number().int().min(1).max(100).default(3),
+});
+
+const NewBusinessSchema = BaseSchema.extend({
+  signalType: z.literal("new_business"),
+  states: z
+    .array(z.string().trim().length(2).toUpperCase())
+    .max(10)
+    .optional(),
+  naicsCodes: z.array(z.string().trim().min(2).max(8)).max(20).optional(),
+});
+
+const LicenseSchema = BaseSchema.extend({
+  signalType: z.literal("license"),
+  states: z
+    .array(z.string().trim().length(2).toUpperCase())
+    .min(1, "Add at least one state for license discovery")
+    .max(10),
+  licenseTypes: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
 });
 
 const CreateSignalSchema = z.discriminatedUnion("signalType", [
@@ -58,6 +80,8 @@ const CreateSignalSchema = z.discriminatedUnion("signalType", [
   HiringSchema,
   NewsSchema,
   ReviewsSchema,
+  NewBusinessSchema,
+  LicenseSchema,
 ]);
 
 export async function GET() {
@@ -112,13 +136,27 @@ export async function POST(request: NextRequest) {
   } else if (data.signalType === "news") {
     signalType = "news";
     config = { ...baseConfig, keywords: data.keywords };
-  } else {
+  } else if (data.signalType === "reviews") {
     signalType = "reviews";
     config = {
       ...baseConfig,
       reviewPlatform: data.reviewPlatform,
       reviewSentiment: data.reviewSentiment,
       minReviewCount: data.minReviewCount,
+    };
+  } else if (data.signalType === "new_business") {
+    signalType = "new_business";
+    config = {
+      ...baseConfig,
+      states: data.states,
+      naicsCodes: data.naicsCodes,
+    };
+  } else {
+    signalType = "license";
+    config = {
+      ...baseConfig,
+      states: data.states,
+      licenseTypes: data.licenseTypes,
     };
   }
 

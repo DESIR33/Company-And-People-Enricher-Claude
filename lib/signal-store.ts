@@ -2,7 +2,13 @@ import { v4 as uuidv4 } from "uuid";
 import { getDb } from "./db";
 import type { MonitorSchedule } from "./monitor-store";
 
-export type SignalType = "funding" | "hiring" | "news" | "reviews";
+export type SignalType =
+  | "funding"
+  | "hiring"
+  | "news"
+  | "reviews"
+  | "new_business"
+  | "license";
 
 export type SignalConfig = {
   industryFilter?: string;
@@ -18,9 +24,13 @@ export type SignalConfig = {
   // news-specific
   keywords?: string[];
   // reviews-specific
-  reviewPlatform?: "google" | "yelp" | "any";
-  reviewSentiment?: "positive" | "negative" | "any";
+  reviewPlatform?: "google" | "yelp" | "tripadvisor" | "any";
+  reviewSentiment?: "positive" | "negative" | "new_on_platform" | "any";
   minReviewCount?: number;
+  // new_business / license-specific (Phase 3.14-15)
+  states?: string[];     // two-letter postal abbreviations
+  naicsCodes?: string[]; // NAICS industry codes for new_business filtering
+  licenseTypes?: string[]; // e.g. "general contractor", "plumber", "HVAC"
 };
 
 export type SignalMonitor = {

@@ -325,12 +325,39 @@ function initSqlite(db: Database.Database): void {
       source_url TEXT,
       score INTEGER,
       created_at INTEGER NOT NULL,
+      phone TEXT,
+      street_address TEXT,
+      city TEXT,
+      region TEXT,
+      postal_code TEXT,
+      country_code TEXT,
+      lat REAL,
+      lng REAL,
+      place_id TEXT,
+      hours TEXT,
+      naics_code TEXT,
+      license_number TEXT,
+      first_seen_at INTEGER,
+      identity_key TEXT,
       FOREIGN KEY (search_id) REFERENCES discovery_searches(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_discovered_leads_search
       ON discovered_leads(search_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_discovered_leads_identity
+      ON discovered_leads(search_id, identity_key);
     CREATE INDEX IF NOT EXISTS idx_discovery_searches_parent
       ON discovery_searches(parent_monitor_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS scrape_cache (
+      cache_key TEXT PRIMARY KEY,
+      url TEXT NOT NULL,
+      content TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      source TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_scrape_cache_expiry
+      ON scrape_cache(expires_at);
     CREATE TABLE IF NOT EXISTS signal_monitors (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -363,6 +390,36 @@ function initSqlite(db: Database.Database): void {
   }
   if (!searchColumns.has("directory_config")) {
     db.exec(`ALTER TABLE discovery_searches ADD COLUMN directory_config TEXT`);
+  }
+  if (!searchColumns.has("webhook_url")) {
+    db.exec(`ALTER TABLE discovery_searches ADD COLUMN webhook_url TEXT`);
+  }
+  // Phase 1.1 — extended NAP + structured fields on discovered_leads.
+  const leadColumns = new Set(
+    (db.prepare(`PRAGMA table_info(discovered_leads)`).all() as { name: string }[]).map(
+      (c) => c.name
+    )
+  );
+  const NEW_LEAD_COLUMNS: Array<[string, string]> = [
+    ["phone", "TEXT"],
+    ["street_address", "TEXT"],
+    ["city", "TEXT"],
+    ["region", "TEXT"],
+    ["postal_code", "TEXT"],
+    ["country_code", "TEXT"],
+    ["lat", "REAL"],
+    ["lng", "REAL"],
+    ["place_id", "TEXT"],
+    ["hours", "TEXT"],
+    ["naics_code", "TEXT"],
+    ["license_number", "TEXT"],
+    ["first_seen_at", "INTEGER"],
+    ["identity_key", "TEXT"],
+  ];
+  for (const [name, type] of NEW_LEAD_COLUMNS) {
+    if (!leadColumns.has(name)) {
+      db.exec(`ALTER TABLE discovered_leads ADD COLUMN ${name} ${type}`);
+    }
   }
   // Backfill new columns on pre-existing databases.
   const jobColumns = new Set(
@@ -628,8 +685,10 @@ function initSupabase(db: QueryDb): void {
       discovery_log TEXT,
       agent_note TEXT,
       error TEXT,
-      parent_monitor_id TEXT
+      parent_monitor_id TEXT,
+      webhook_url TEXT
     );
+    ALTER TABLE discovery_searches ADD COLUMN IF NOT EXISTS webhook_url TEXT;
     CREATE TABLE IF NOT EXISTS discovered_leads (
       id TEXT PRIMARY KEY,
       search_id TEXT NOT NULL REFERENCES discovery_searches(id) ON DELETE CASCADE,
@@ -643,8 +702,46 @@ function initSupabase(db: QueryDb): void {
       match_reason TEXT,
       source_url TEXT,
       score INTEGER,
-      created_at BIGINT NOT NULL
+      created_at BIGINT NOT NULL,
+      phone TEXT,
+      street_address TEXT,
+      city TEXT,
+      region TEXT,
+      postal_code TEXT,
+      country_code TEXT,
+      lat DOUBLE PRECISION,
+      lng DOUBLE PRECISION,
+      place_id TEXT,
+      hours TEXT,
+      naics_code TEXT,
+      license_number TEXT,
+      first_seen_at BIGINT,
+      identity_key TEXT
     );
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS phone TEXT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS street_address TEXT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS city TEXT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS region TEXT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS postal_code TEXT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS country_code TEXT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS place_id TEXT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS hours TEXT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS naics_code TEXT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS license_number TEXT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS first_seen_at BIGINT;
+    ALTER TABLE discovered_leads ADD COLUMN IF NOT EXISTS identity_key TEXT;
+    CREATE TABLE IF NOT EXISTS scrape_cache (
+      cache_key TEXT PRIMARY KEY,
+      url TEXT NOT NULL,
+      content TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      source TEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      expires_at BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_scrape_cache_expiry ON scrape_cache(expires_at);
     CREATE TABLE IF NOT EXISTS signal_monitors (
       id TEXT PRIMARY KEY,
       workspace_id TEXT,
@@ -667,6 +764,7 @@ function initSupabase(db: QueryDb): void {
     CREATE INDEX IF NOT EXISTS idx_monitor_leads_monitor ON monitor_leads(monitor_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_monitor_leads_run ON monitor_leads(run_id);
     CREATE INDEX IF NOT EXISTS idx_discovered_leads_search ON discovered_leads(search_id, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_discovered_leads_identity ON discovered_leads(search_id, identity_key);
     CREATE INDEX IF NOT EXISTS idx_discovery_searches_parent ON discovery_searches(parent_monitor_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_signal_monitors_due ON signal_monitors(active, next_run_at);
     CREATE INDEX IF NOT EXISTS idx_jobs_workspace ON jobs(workspace_id, created_at DESC);
